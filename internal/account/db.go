@@ -332,8 +332,17 @@ func (a *Account) storeRecvMessage(recvBkt *bolt.Bucket, id, payload []byte) err
 	}
 
 	// Ensure that none of the verboten headers are set.
+	if err = imf.ValidateHeaders(msg); err != nil {
+		// The message has proscribed headers set, wrap it in a DSN.
+		a.log.Warningf("Message %v failed header validation: %v", idStr, err)
+		// XXX: Payload -> DSN.
+		return nil
+	}
 
-	// Add the various headers (Received, X-Katzenpost-blah blah blah).
+	// Add the various headers.
+	//
+	// XXX: Should this prepend a `Received` header for the recpient side
+	// mailproxy?
 	msg.Header.Set(imf.SenderIdentityHeader, base64.StdEncoding.EncodeToString(sender.Bytes()))
 
 	// Store the modified message in the spool.

@@ -20,6 +20,7 @@ package imf
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 
 	"github.com/emersion/go-message"
@@ -29,6 +30,10 @@ import (
 // of the sender's public key, set by the recipient upon successfully receiving
 // a message.
 const SenderIdentityHeader = "X-Katzenpost-Sender-Identity-Key"
+
+var proscribedHeaders = []string{
+	SenderIdentityHeader,
+}
 
 // EntityToBytes re-serializes a message.Entity into a byte slice suitable for
 // storage or presentation to the user.  It assumes that e.Body points to an
@@ -51,4 +56,15 @@ func EntityToBytes(e *message.Entity) ([]byte, error) {
 	io.Copy(w, e.Body)
 
 	return b.Bytes(), nil
+}
+
+// ValidateHeaders sanity checks an IMF message to ensure that none of the
+// proscribed headers are defined.
+func ValidateHeaders(e *message.Entity) error {
+	for _, k := range proscribedHeaders {
+		if e.Header.Get(k) != "" {
+			return fmt.Errorf("forbidden header '%v' defined", k)
+		}
+	}
+	return nil
 }
