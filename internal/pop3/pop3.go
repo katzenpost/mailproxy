@@ -413,10 +413,11 @@ func (s *Session) onCmdRetr(splitL []string) error {
 	if err := s.writeOk("message follows"); err != nil {
 		return err
 	}
-	maxSz := len(s.messages[idx-1])
-	buf := make([]byte, 0, maxSz)
+
+	// It is the caller's problem to ensure that lines are not over
+	// bufio.MaxScanTokenSize (64 KiB).  RFC 5322 imposes a 998 character
+	// limit, and this is considerably more generous.
 	scanner := bufio.NewScanner(bytes.NewReader(s.messages[idx-1]))
-	scanner.Buffer(buf, maxSz) // Handle tokens up to the length of the message.
 	for scanner.Scan() {
 		line := scanner.Text()
 		if len(line) > 0 && line[0] == '.' { // See RFC 1939 Section 3 ("byte-stuffed")

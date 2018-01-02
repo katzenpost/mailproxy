@@ -19,9 +19,11 @@
 package imf
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
+	"io/ioutil"
 
 	"github.com/emersion/go-message"
 )
@@ -47,18 +49,42 @@ func BytesToEntity(b []byte) (*message.Entity, error) {
 		}
 	}
 
-	// BUG/#6: If we decide to enforce line length restrictions on incoming
-	// messages, this would be the logical place to do so (RFC 5322 2.1.1).
-
 	// This returns an entity with the header parsed, but the entirety of the
 	// body left unexamined, because parsing muti-part MIME is fraught with
-	// peril, particularly if the input is hostile.
+	// peril, particularly if the input is hostile, and we want to examine
+	// the body as is afterwards.
 	e, err := message.Read(bytes.NewReader(b))
 	if err != nil {
 		// The parser is overly verbose and includes snippets of the payload,
 		// which is probably not a good idea to propagate everywhere.
 		return nil, fmt.Errorf("failed to parse message headers")
 	}
+
+	// Convert the body to something that supports seeking.
+	body, err := ioutil.ReadAll(e.Body)
+	if err != nil {
+		// This should *NEVER* happen.
+		return nil, fmt.Errorf("internal error reading message body")
+	}
+	br := bytes.NewReader(body)
+
+	// RFC 5322 2.1.1 - Mandates lines less than or equal to 998 characters.
+	//
+	// But there's probably enough broken things out there that being more
+	// forgiving is likely preferable, so this uses bufio.MaxScanTokenSize
+	// as the upper bound (64 KiB).
+	scanner := bufio.NewScanner(br)
+	for scanner.Scan() {
+		/* We just want to parse out all the lines. */
+	}
+	if err = scanner.Err(); err != nil {
+		return nil, fmt.Errorf("failed to parse body, likely oversized line")
+	}
+
+	// Seek the body reader back to the begining and use it as the new e.Body,
+	// since that was consumed so that the message body could be inspected.
+	br.Seek(0, io.SeekStart)
+	e.Body = br
 
 	return e, nil
 }
