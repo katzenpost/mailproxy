@@ -53,7 +53,6 @@ package account
 //
 
 import (
-	"bytes"
 	"crypto/sha512"
 	"encoding/base64"
 	"encoding/binary"
@@ -62,7 +61,6 @@ import (
 	"path/filepath"
 
 	bolt "github.com/coreos/bbolt"
-	"github.com/emersion/go-message"
 	"github.com/katzenpost/core/crypto/ecdh"
 	"github.com/katzenpost/mailproxy/internal/imf"
 	"github.com/katzenpost/mailproxy/internal/pop3"
@@ -327,12 +325,9 @@ func (a *Account) storeRecvMessage(recvBkt *bolt.Bucket, id, payload []byte) err
 	a.log.Debugf("Message %v Payload: %v", idStr, hex.Dump(payload))
 
 	// Validate that the message is well formed IMF.
-	msg, err := message.Read(bytes.NewReader(payload))
+	msg, err := imf.BytesToEntity(payload)
 	if err != nil {
 		// If the message is malformed, wrap it in a DSN.
-		//
-		// Note: err is verbose and includes snippets of payload, so
-		// probably shouldn't be logged.
 		a.log.Warningf("Message %v is not well formed IMF: %v", idStr, err)
 		// XXX: Payload -> DSN.
 		return nil
