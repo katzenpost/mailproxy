@@ -22,9 +22,10 @@ package account
 // the following layout:
 //
 // - "metadata"  - Per-file metadata.
-//   - "version" - File format version (0x00).
+//   - "version"     - File format version (0x00).
 // - "receive"   - Receive related data.
-//   - "fragments" - Messages in the process of being reassembled.
+//   - "lastDedupGC" - Last unix time the dedup cache was GCed.
+//   - "fragments"   - Messages in the process of being reassembled.
 //     - senderPK | messageID - A message entry.
 //       - "totalBlocks"    - Total blocks in the message (uint64).
 //       - "receivedBlocks" - Number of blocks received so far (uint64).
@@ -59,7 +60,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"path/filepath"
-	"time"
 
 	bolt "github.com/coreos/bbolt"
 	"github.com/emersion/go-message"
@@ -70,11 +70,12 @@ import (
 )
 
 const (
-	recvBucket  = "receive"
-	fragsBucket = "fragments"
-	spoolBucket = "spool"
-	dedupBucket = "dedup"
-	lastRecvKey = "lastRecv"
+	recvBucket     = "receive"
+	fragsBucket    = "fragments"
+	spoolBucket    = "spool"
+	dedupBucket    = "dedup"
+	lastRecvKey    = "lastRecv"
+	lastDedupGCKey = "lastDedupGC"
 
 	sendBucket = "send"
 )
@@ -98,7 +99,8 @@ func (a *Account) initDatabase() error {
 		if err != nil {
 			return err
 		}
-		if recvBkt, err := tx.CreateBucketIfNotExists([]byte(recvBucket)); err != nil {
+		recvBkt, err := tx.CreateBucketIfNotExists([]byte(recvBucket))
+		if err != nil {
 			return err
 		} else {
 			if _, err := recvBkt.CreateBucketIfNotExists([]byte(fragsBucket)); err != nil {
@@ -122,7 +124,12 @@ func (a *Account) initDatabase() error {
 			if len(b) != 1 || b[0] != 0 {
 				return fmt.Errorf("db: incompatible version: %v", b)
 			}
-			// XXX: Restore state?
+
+			// Restore state.
+			b = recvBkt.Get([]byte(lastDedupGCKey))
+			if len(b) == 8 {
+				a.lastDedupGC = binary.BigEndian.Uint64(b)
+			}
 
 			return nil
 		}
@@ -373,20 +380,6 @@ func (a *Account) storeMessage(recvBkt *bolt.Bucket, payload []byte) error {
 	return nil
 }
 
-func (a *Account) skewedNow() uint64 {
-	// Calls to this should only happen if the connection's been established
-	// at least once, which for now is guaranteed by virute of this only
-	// happening in the onBlock callback....
-	//
-	// Though this is subject to change for GC related reasons. :(
-
-	if a.client == nil {
-		// Can't get a coherent skewed time, if the client doesn't exist.
-		return uint64(time.Now().Unix())
-	}
-	return uint64(time.Now().Add(a.client.ClockSkew()).Unix())
-}
-
 func (a *Account) newPOPSession() (pop3.BackendSession, error) {
 	a.Lock()
 	defer a.Unlock()
@@ -424,6 +417,54 @@ func (a *Account) newPOPSession() (pop3.BackendSession, error) {
 	a.log.Noticef("POP3 session created.")
 
 	return s, nil
+}
+
+func (a *Account) doDedupGC() {
+	const (
+		gcIntervalSec = 86400     // 1 day.
+		entryTTL      = 5 * 86400 // 5 days.
+	)
+
+	a.Lock()
+	defer a.Unlock()
+
+	now := a.skewedNow()
+	deltaT := now - a.lastDedupGC
+	if deltaT < gcIntervalSec && now > a.lastDedupGC {
+		// Don't do the GC pass all that frequently.
+		return
+	}
+
+	a.log.Debugf("Starting de-duplication cache GC cycle.")
+
+	examined, deleted := 0, 0
+	if err := a.db.Update(func(tx *bolt.Tx) error {
+		recvBkt := tx.Bucket([]byte(recvBucket))
+		dedupBkt := recvBkt.Bucket([]byte(dedupBucket))
+
+		cur := dedupBkt.Cursor()
+		for k, v := cur.First(); k != nil; k, v = cur.Next() {
+			examined++
+			t := binary.BigEndian.Uint64(v)
+			if now > t && now-t > entryTTL {
+				cur.Delete()
+				deleted++
+			}
+		}
+
+		// Update the time stamp of the last GC cycle.
+		var ts [8]byte
+		binary.BigEndian.PutUint64(ts[:], now)
+		recvBkt.Put([]byte(lastDedupGCKey), ts[:])
+
+		return nil
+	}); err != nil {
+		a.log.Warningf("Failed to GC de-duplication cache: %v", err)
+		return
+	}
+
+	a.lastDedupGC = now
+	a.log.Debugf("Finished de-duplication cache GC cycle: %v/%v pruned.", deleted, examined)
 }
 
 func reassembleFragments(bkt *bolt.Bucket, totalBlocks uint64) ([]byte, error) {

@@ -22,12 +22,14 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	bolt "github.com/coreos/bbolt"
 	"github.com/katzenpost/core/crypto/ecdh"
 	"github.com/katzenpost/core/crypto/rand"
 	"github.com/katzenpost/core/sphinx/constants"
 	"github.com/katzenpost/core/utils"
+	"github.com/katzenpost/core/worker"
 	"github.com/katzenpost/mailproxy/config"
 	"github.com/katzenpost/mailproxy/internal/authority"
 	"github.com/katzenpost/minclient"
@@ -37,6 +39,7 @@ import (
 
 // Account is a Provider account and it's associated client instance.
 type Account struct {
+	worker.Worker
 	sync.Mutex
 	s *Store
 
@@ -53,6 +56,9 @@ type Account struct {
 
 	id       string
 	refCount int32
+
+	opCh        chan workerOp
+	lastDedupGC uint64
 }
 
 // Deref decrements the reference count of the Account.  If the reference count
@@ -84,7 +90,7 @@ func (a *Account) doDeref() {
 }
 
 func (a *Account) doCleanup() {
-	// XXX: Halt the worker.
+	a.Halt()
 
 	if a.popSession != nil {
 		// This should never happen, the POP3 server is torn down before
@@ -144,6 +150,10 @@ func (a *Account) onConn(isConnected bool) {
 
 func (a *Account) onEmpty() error {
 	a.log.Debugf("onEmpty()")
+
+	// Schedule GC cycles if appropriate, but not in the callback context.
+	a.opCh <- &opMaybeGC{}
+
 	return nil
 }
 
@@ -170,11 +180,26 @@ func (a *Account) onACK(surbID *[constants.SURBIDLength]byte, payload []byte) er
 	return nil
 }
 
+func (a *Account) skewedNow() uint64 {
+	// Calls to this should only happen if the connection's been established
+	// at least once, which for now is guaranteed by virute of this only
+	// happening in the onBlock callback....
+	//
+	// Though this is subject to change for GC related reasons. :(
+
+	if a.client == nil {
+		// Can't get a coherent skewed time, if the client doesn't exist.
+		return uint64(time.Now().Unix())
+	}
+	return uint64(time.Now().Add(a.client.ClockSkew()).Unix())
+}
+
 func (s *Store) newAccount(id string, cfg *config.Account) (*Account, error) {
 	a := new(Account)
 	a.s = s
 	a.log = s.logBackend.GetLogger("account:" + id)
 	a.basePath = filepath.Join(s.cfg.Proxy.DataDir, id)
+	a.opCh = make(chan workerOp)
 	a.id = id
 	a.refCount = 1 // Store holds a reference.
 
@@ -231,7 +256,8 @@ func (s *Store) newAccount(id string, cfg *config.Account) (*Account, error) {
 		return nil, err
 	}
 
-	// XXX: Start the worker.
+	// Start the worker.
+	a.Go(a.worker)
 
 	isOk = true
 	return a, nil
