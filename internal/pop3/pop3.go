@@ -30,8 +30,6 @@ import (
 	"net/textproto"
 	"strconv"
 	"strings"
-
-	"github.com/katzenpost/core/utils"
 )
 
 const (
@@ -198,7 +196,7 @@ authLoop:
 		case cmdPass:
 			authUser := user
 			user = nil // Regardless, a new USER command must be issued.
-			if len(splitL) != 2 {
+			if len(splitL) < 2 {
 				// No password specified.
 				if err := s.writeErr("no password specified"); err != nil {
 					return err
@@ -212,11 +210,12 @@ authLoop:
 				}
 				break
 			}
+			pass := bytes.Join(splitL[1:], []byte{' '})
 
 			// Call the backend to attempt to authenticate, and lock the mail
 			// drop.
 			var err error
-			if s.bs, err = s.b.NewSession(authUser, splitL[1]); err != nil {
+			if s.bs, err = s.b.NewSession(authUser, pass); err != nil {
 				switch err {
 				case ErrInUse, ErrBackendFail:
 					// RFC 2499: IN-USE response code.
@@ -232,7 +231,6 @@ authLoop:
 				break
 			}
 
-			utils.ExplicitBzero(splitL[1])
 			if err = s.writeOk("maildrop locked and ready"); err != nil {
 				s.bs.Close()
 				return err
