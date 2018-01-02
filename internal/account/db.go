@@ -380,6 +380,16 @@ func (a *Account) storeMessage(recvBkt *bolt.Bucket, payload []byte) error {
 	return nil
 }
 
+func (a *Account) resetSpoolSeq(spoolBkt *bolt.Bucket) {
+	// WARNING: This assumes it is called as part of a write capable
+	// transaction.
+
+	cur := spoolBkt.Cursor()
+	if first, _ := cur.First(); first == nil {
+		spoolBkt.SetSequence(0)
+	}
+}
+
 func (a *Account) newPOPSession() (pop3.BackendSession, error) {
 	a.Lock()
 	defer a.Unlock()
@@ -517,10 +527,7 @@ func (s *popSession) DeleteMessages(msgs []int) error {
 		}
 
 		// Reset the sequence number if the spool was depleted.
-		cur := spoolBkt.Cursor()
-		if first, _ := cur.First(); first == nil {
-			spoolBkt.SetSequence(0)
-		}
+		s.a.resetSpoolSeq(spoolBkt)
 		return nil
 	})
 }
