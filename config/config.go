@@ -28,6 +28,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	nvClient "github.com/katzenpost/authority/nonvoting/client"
+	"github.com/katzenpost/core/crypto/ecdh"
 	"github.com/katzenpost/core/crypto/eddsa"
 	"github.com/katzenpost/core/log"
 	"github.com/katzenpost/core/pki"
@@ -255,6 +256,7 @@ type Config struct {
 
 	NonvotingAuthority map[string]*NonvotingAuthority
 	Account            []*Account
+	Recipients         map[string]*ecdh.PublicKey
 
 	authorities map[string]authority.Factory
 	accounts    map[string]*Account
@@ -290,6 +292,9 @@ func (cfg *Config) FixupAndValidate() error {
 	cfg.Management.applyDefaults(cfg.Proxy)
 	if cfg.Debug == nil {
 		cfg.Debug = &Debug{}
+	}
+	if cfg.Recipients == nil {
+		cfg.Recipients = make(map[string]*ecdh.PublicKey)
 	}
 	cfg.authorities = make(map[string]authority.Factory)
 	cfg.accounts = make(map[string]*Account)

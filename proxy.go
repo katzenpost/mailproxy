@@ -29,6 +29,7 @@ import (
 	"github.com/katzenpost/mailproxy/config"
 	"github.com/katzenpost/mailproxy/internal/account"
 	"github.com/katzenpost/mailproxy/internal/authority"
+	"github.com/katzenpost/mailproxy/internal/recipient"
 	"github.com/op/go-logging"
 )
 
@@ -44,6 +45,7 @@ type Proxy struct {
 
 	accounts    *account.Store
 	authorities *authority.Store
+	recipients  *recipient.Store
 	popListener *popListener
 	management  *thwack.Server
 
@@ -170,6 +172,15 @@ func New(cfg *config.Config) (*Proxy, error) {
 			p.fatalErrCh <- fmt.Errorf("user requested shutdown via mgmt interface")
 			return nil
 		})
+	}
+
+	// Initialize the recipient public key store.
+	p.recipients = recipient.New(p.cfg.Debug, p.management)
+	for k, v := range p.cfg.Recipients {
+		// Failures to add recipients are non-fatal.
+		if err = p.recipients.Set(k, v); err != nil {
+			p.log.Warningf("Failed to add recipient '%v' to store: %v", k, err)
+		}
 	}
 
 	// Bring the authority cache online.
