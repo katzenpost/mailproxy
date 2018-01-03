@@ -19,11 +19,9 @@
 package imf
 
 import (
-	"bufio"
 	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
 
 	"github.com/emersion/go-message"
 )
@@ -37,8 +35,7 @@ var proscribedHeaders = []string{
 	SenderIdentityHeader,
 }
 
-// BytesToEntity de-serializes a byte buffer to a message.Entity, while doing
-// some basic sanity checking for RFC 5322 compliance.
+// BytesToEntity de-serializes a byte buffer to a message.Entity.
 func BytesToEntity(b []byte) (*message.Entity, error) {
 	// RFC 5322 2.1 - Mandates US-ASCII encoding, but the reality is that
 	// everyone expects either 8BITMIME support, or 8 bit messages to just
@@ -55,31 +52,10 @@ func BytesToEntity(b []byte) (*message.Entity, error) {
 		return nil, fmt.Errorf("failed to parse message headers")
 	}
 
-	// Convert the body to something that supports seeking.
-	body, err := ioutil.ReadAll(e.Body)
-	if err != nil {
-		// This should *NEVER* happen.
-		return nil, fmt.Errorf("internal error reading message body")
-	}
-	br := bytes.NewReader(body)
-
-	// RFC 5322 2.1.1 - Mandates lines less than or equal to 998 characters.
-	//
-	// But there's probably enough broken things out there that being more
-	// forgiving is likely preferable, so this uses bufio.MaxScanTokenSize
-	// as the upper bound (64 KiB).
-	scanner := bufio.NewScanner(br)
-	for scanner.Scan() {
-		/* We just want to parse out all the lines. */
-	}
-	if err = scanner.Err(); err != nil {
-		return nil, fmt.Errorf("failed to parse body, likely oversized line")
-	}
-
-	// Seek the body reader back to the begining and use it as the new e.Body,
-	// since that was consumed so that the message body could be inspected.
-	br.Seek(0, io.SeekStart)
-	e.Body = br
+	// RFC 5322 2.1.1 - Mandates lines less than or equal to 998 characters,
+	// but there's enough broken things out there that enforcing this will
+	// lead to problems, and the POP3 code should support arbitrary length
+	// lines.
 
 	return e, nil
 }
