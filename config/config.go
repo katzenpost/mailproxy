@@ -33,6 +33,7 @@ import (
 	"github.com/katzenpost/core/pki"
 	"github.com/katzenpost/core/utils"
 	"github.com/katzenpost/mailproxy/internal/authority"
+	"golang.org/x/text/secure/precis"
 )
 
 const (
@@ -178,9 +179,15 @@ type Account struct {
 	ForceIdentityKey string
 }
 
-func (accCfg *Account) fixup(cfg *Config) {
+func (accCfg *Account) fixup(cfg *Config) error {
+	var err error
 	if !cfg.Debug.CaseSensitiveUserIdentifiers {
-		accCfg.User = strings.ToLower(accCfg.User)
+		accCfg.User, err = precis.UsernameCaseMapped.String(accCfg.User)
+	} else {
+		accCfg.User, err = precis.UsernameCasePreserved.String(accCfg.User)
+	}
+	if err != nil {
+		return err
 	}
 
 	// Provider identifiers should basically always be case insensitive
@@ -189,6 +196,7 @@ func (accCfg *Account) fixup(cfg *Config) {
 	if !cfg.Debug.CaseSensitiveProviderIdentifiers {
 		accCfg.Provider = strings.ToLower(accCfg.Provider)
 	}
+	return nil
 }
 
 func (accCfg *Account) toEmailAddr() (string, error) {
@@ -305,11 +313,13 @@ func (cfg *Config) FixupAndValidate() error {
 		}
 		cfg.authorities[k] = v
 	}
-	for _, v := range cfg.Account {
-		v.fixup(cfg)
+	for idx, v := range cfg.Account {
+		if err := v.fixup(cfg); err != nil {
+			return fmt.Errorf("config: Account #%d is invalid (User): %v", idx, err)
+		}
 		addr, err := v.toEmailAddr()
 		if err != nil {
-			return fmt.Errorf("config: Account '%v' is invalid (Identifier): %v", addr, err)
+			return fmt.Errorf("config: Account #%d is invalid (Identifier): %v", idx, err)
 		}
 		if err := v.validate(cfg); err != nil {
 			return fmt.Errorf("config: Account '%v' is invalid: %v", addr, err)
