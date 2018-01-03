@@ -36,9 +36,10 @@ import (
 )
 
 const (
-	defaultPOP3Addr = "127.0.0.1:2524"
-	defaultSMTPAddr = "127.0.0.1:2525"
-	defaultLogLevel = "NOTICE"
+	defaultPOP3Addr         = "127.0.0.1:2524"
+	defaultSMTPAddr         = "127.0.0.1:2525"
+	defaultLogLevel         = "NOTICE"
+	defaultManagementSocket = "management_sock"
 )
 
 var defaultLogging = Logging{
@@ -211,11 +212,38 @@ func (accCfg *Account) validate(cfg *Config) error {
 	return nil
 }
 
+// Management is the mailproxy management interface configuration.
+type Management struct {
+	// Enable enables the management interface.
+	Enable bool
+
+	// Path specifies the path to the management interface socket.  If left
+	// empty it will use `management_sock` under the DataDir.
+	Path string
+}
+
+func (mCfg *Management) applyDefaults(pCfg *Proxy) {
+	if mCfg.Path == "" {
+		mCfg.Path = filepath.Join(pCfg.DataDir, defaultManagementSocket)
+	}
+}
+
+func (mCfg *Management) validate() error {
+	if !mCfg.Enable {
+		return nil
+	}
+	if !filepath.IsAbs(mCfg.Path) {
+		return fmt.Errorf("config: Management: Path '%v' is not an absolute path", mCfg.Path)
+	}
+	return nil
+}
+
 // Config is the top level mail proxy configuration.
 type Config struct {
-	Proxy   *Proxy
-	Logging *Logging
-	Debug   *Debug
+	Proxy      *Proxy
+	Logging    *Logging
+	Management *Management
+	Debug      *Debug
 
 	NonvotingAuthority map[string]*NonvotingAuthority
 	Account            []*Account
@@ -248,6 +276,10 @@ func (cfg *Config) FixupAndValidate() error {
 	if cfg.Logging == nil {
 		cfg.Logging = &defaultLogging
 	}
+	if cfg.Management == nil {
+		cfg.Management = &Management{}
+	}
+	cfg.Management.applyDefaults(cfg.Proxy)
 	if cfg.Debug == nil {
 		cfg.Debug = &Debug{}
 	}
@@ -259,6 +291,9 @@ func (cfg *Config) FixupAndValidate() error {
 		return err
 	}
 	if err := cfg.Logging.validate(); err != nil {
+		return err
+	}
+	if err := cfg.Management.validate(); err != nil {
 		return err
 	}
 	for k, v := range cfg.NonvotingAuthority {

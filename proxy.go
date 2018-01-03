@@ -19,6 +19,7 @@ package mailproxy
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sync"
 
@@ -148,10 +149,33 @@ func New(cfg *config.Config) (*Proxy, error) {
 		p.Shutdown()
 	}()
 
+	var err error
+	// Bring the management interface online if enabled.
+	if !p.cfg.Debug.GenerateOnly && p.cfg.Management.Enable {
+		p.log.Noticef("bringing managment interface online")
+		mgmtCfg := &thwack.Config{
+			Net:         "unix",
+			Addr:        p.cfg.Management.Path,
+			ServiceName: "Katzenpost Mailproxy Management Interface",
+			LogModule:   "mgmt",
+			NewLoggerFn: p.logBackend.GetLogger,
+		}
+		if p.management, err = thwack.New(mgmtCfg); err != nil {
+			p.log.Errorf("Failed to initialize management interface: %v", err)
+			return nil, err
+		}
+
+		const shutdownCmd = "SHUTDOWN"
+		p.management.RegisterCommand(shutdownCmd, func(c *thwack.Conn, l string) error {
+			p.fatalErrCh <- fmt.Errorf("user requested shutdown via mgmt interface")
+			return nil
+		})
+	}
+
 	// Bring the authority cache online.
 	p.authorities = authority.NewStore(p.logBackend)
 	for k, v := range p.cfg.AuthorityMap() {
-		if err := p.authorities.Set(k, v); err != nil {
+		if err = p.authorities.Set(k, v); err != nil {
 			p.log.Errorf("Failed to add authority '%v' to store: %v", k, err)
 			return nil, err
 		}
@@ -159,10 +183,6 @@ func New(cfg *config.Config) (*Proxy, error) {
 	}
 
 	if !p.cfg.Debug.GenerateOnly {
-		var err error
-
-		// XXX: Bring the management interface online.
-
 		// Bring the POP3 interface online.
 		if p.popListener, err = newPOPListener(p); err != nil {
 			p.log.Errorf("Failed to start POP3 listener: %v", err)
@@ -175,7 +195,7 @@ func New(cfg *config.Config) (*Proxy, error) {
 	// Bring the accounts online.
 	p.accounts = account.NewStore(g)
 	for k, v := range p.cfg.AccountMap() {
-		if err := p.accounts.Set(k, v); err != nil {
+		if err = p.accounts.Set(k, v); err != nil {
 			p.log.Errorf("Failed to add account '%v' to store: %v", k, err)
 			return nil, err
 		}
@@ -184,6 +204,12 @@ func New(cfg *config.Config) (*Proxy, error) {
 
 	if p.cfg.Debug.GenerateOnly {
 		return nil, ErrGenerateOnly
+	}
+
+	// Start listening on the management if enabled, now that all subsystems
+	// have had the opportunity to register commands.
+	if p.management != nil {
+		p.management.Start()
 	}
 
 	isOk = true
