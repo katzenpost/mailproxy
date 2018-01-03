@@ -40,14 +40,9 @@ var proscribedHeaders = []string{
 // BytesToEntity de-serializes a byte buffer to a message.Entity, while doing
 // some basic sanity checking for RFC 5322 compliance.
 func BytesToEntity(b []byte) (*message.Entity, error) {
-	// RFC 5322 2.1 - Mandates US-ASCII encoding.  This doesn't mean that
-	// users can't send binary data or non-English, it just means that they
-	// need to use MIME.
-	for _, v := range b {
-		if v == 0 || v > 0x7f {
-			return nil, fmt.Errorf("octet '%x' is not US-ASCII", v)
-		}
-	}
+	// RFC 5322 2.1 - Mandates US-ASCII encoding, but the reality is that
+	// everyone expects either 8BITMIME support, or 8 bit messages to just
+	// work, so no enforcement is done.
 
 	// This returns an entity with the header parsed, but the entirety of the
 	// body left unexamined, because parsing muti-part MIME is fraught with
