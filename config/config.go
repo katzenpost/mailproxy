@@ -110,13 +110,17 @@ func (lCfg *Logging) validate() error {
 
 // Debug is the mail proxy debug configuration.
 type Debug struct {
+	// CaseSensitiveUserIdentifiers disables the forced lower casing of
+	// the Account `User` field.
+	CaseSensitiveUserIdentifiers bool
+
+	// CaseSensitiveProviderIdentifiers disables the forced lower casing of
+	// the Account `Provider` field.
+	CaseSensitiveProviderIdentifiers bool
+
 	// GenerateOnly halts and cleans up the mail proxy right after long term
 	// key generation.
 	GenerateOnly bool
-
-	// CaseSensitiveAccountIdentifiers disables the forced lower casing of
-	// Account `User` and `Provider` fields.
-	CaseSensitiveAccountIdentifiers bool
 }
 
 // NonvotingAuthority is a non-voting authority configuration.
@@ -174,8 +178,14 @@ type Account struct {
 }
 
 func (accCfg *Account) fixup(cfg *Config) {
-	if !cfg.Debug.CaseSensitiveAccountIdentifiers {
+	if !cfg.Debug.CaseSensitiveUserIdentifiers {
 		accCfg.User = strings.ToLower(accCfg.User)
+	}
+
+	// Provider identifiers should basically always be case insensitive
+	// in the context of e-mail, because it serves as the `domain`
+	// component of the address.
+	if !cfg.Debug.CaseSensitiveProviderIdentifiers {
 		accCfg.Provider = strings.ToLower(accCfg.Provider)
 	}
 }
