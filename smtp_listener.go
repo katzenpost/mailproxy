@@ -32,7 +32,7 @@ import (
 )
 
 var smtpdCfg = smtpd.Config{
-	LocalName: "localhost",
+	LocalName: "katzenpost.localhost",
 	SftName:   "Katzenpost",
 	SayTime:   false,
 }
@@ -186,35 +186,10 @@ evLoop:
 				break evLoop
 			}
 		case smtpd.GOTDATA:
-			entity, err := imf.BytesToEntity([]byte(ev.Arg))
-			if err != nil {
-				s.log.Errorf("Malformed IMF: %v", err)
-				env.Reset()
+			if err := s.onGotData(env, []byte(ev.Arg)); err != nil {
+				s.log.Errorf("Failed to handle received message: %v", err)
 				s.sConn.Reject()
-				break
 			}
-
-			// Add the headers that normal MTAs will too.
-			imf.AddMessageID(entity)
-			// XXX: Received header.
-
-			// Re-serialize the IMF message now to apply the new headers,
-			// and canonicalize the line endings.
-			payload, err := imf.EntityToBytes(entity)
-			if err != nil {
-				s.log.Errorf("Failed to re-serialize IMF: %v", err)
-				env.Reset()
-				s.sConn.Reject()
-				break
-			}
-
-			s.log.Debugf("DATA: %v", hex.Dump(payload))
-			env.SetPayload(payload)
-
-			// XXX: Do something with the completed envelope.
-			env.DedupRecipients()
-
-			env.Reset()
 		default:
 			s.log.Errorf("Invalid event: %v", ev)
 			break evLoop
@@ -222,6 +197,34 @@ evLoop:
 	}
 
 	s.log.Debugf("Connection terminated.")
+}
+
+func (s *smtpSession) onGotData(env *smtpEnvelope, b []byte) error {
+	defer env.Reset()
+
+	entity, err := imf.BytesToEntity(b)
+	if err != nil {
+		return err
+	}
+
+	// Add the headers that normal MTAs will too.
+	imf.AddMessageID(entity)
+	// XXX: Received header.
+
+	// Re-serialize the IMF message now to apply the new headers,
+	// and canonicalize the line endings.
+	payload, err := imf.EntityToBytes(entity)
+	if err != nil {
+		return err
+	}
+
+	s.log.Debugf("DATA: %v", hex.Dump(payload))
+	env.SetPayload(payload)
+
+	// XXX: Do something with the completed envelope.
+	env.DedupRecipients()
+
+	return nil
 }
 
 func (s *smtpSession) Write(p []byte) (n int, err error) {
