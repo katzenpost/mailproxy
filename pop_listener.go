@@ -57,16 +57,15 @@ func (l *popListener) worker() {
 			continue
 		}
 
-		l.log.Debugf("Accepted new connection: %v", conn.RemoteAddr())
-		l.Go(func() { l.connWorker(conn) })
+		rAddr := conn.RemoteAddr()
+		l.log.Debugf("Accepted new connection: %v", rAddr)
+		l.Go(func() { l.connWorker(conn, rAddr) })
 	}
 
 	// NOTREACHED
 }
 
-func (l *popListener) connWorker(conn net.Conn) {
-	addr := conn.RemoteAddr()
-
+func (l *popListener) connWorker(conn net.Conn, addr net.Addr) {
 	session := pop3.NewSession(conn, l.p.accounts)
 	session.Serve()
 

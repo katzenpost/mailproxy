@@ -49,17 +49,18 @@ type Store struct {
 
 // Normalize normalizes the provided recipient according to the rules specified
 // at the Store construction time, along with performing some basic sanity
-// checking.  The Store is not queried for recipient presence.
-func (s *Store) Normalize(r string) (string, error) {
+// checking, and returns the normalized address, local part and domain.  The
+// Store is not queried for recipient presence.
+func (s *Store) Normalize(r string) (string, string, string, error) {
 	addr, err := mail.ParseAddress(r)
 	if err != nil {
-		return "", err
+		return "", "", "", err
 	}
 
 	splitA := strings.SplitN(addr.Address, "@", 2)
 	if len(splitA) != 2 {
 		// Should never happen, mail.ParseAddress() appears to validate this.
-		return "", errMissingAt
+		return "", "", "", errMissingAt
 	}
 
 	// XXX: Per RFC 5322 A.5 basically anything can have comments inserted in
@@ -73,25 +74,25 @@ func (s *Store) Normalize(r string) (string, error) {
 		local, err = precis.UsernameCasePreserved.String(local)
 	}
 	if err != nil {
-		return "", err
+		return "", "", "", err
 	}
 	if !s.caseSensitiveProviders {
 		domain = strings.ToLower(domain)
 	}
 
 	if len(local) > constants.RecipientIDLength {
-		return "", errOversizedLocal
+		return "", "", "", errOversizedLocal
 	}
 	// XXX: Validate domain according to the host name rules.
 
-	return local + "@" + domain, nil
+	return local + "@" + domain, local, domain, nil
 }
 
 // Get returns the ecdh.PublicKey for the given recipient, or nil iff the
 // recipient does not exist.  Note that this treats Normalize() failures as if
 // the recipient is invalid.
 func (s *Store) Get(r string) *ecdh.PublicKey {
-	addr, err := s.Normalize(r)
+	addr, _, _, err := s.Normalize(r)
 	if err != nil {
 		return nil
 	}
@@ -105,7 +106,7 @@ func (s *Store) Get(r string) *ecdh.PublicKey {
 // Set sets the ecdh.PublicKey for the provided recipient.  If an existing key
 // is present, it will be silently overwritten.
 func (s *Store) Set(r string, k *ecdh.PublicKey) error {
-	addr, err := s.Normalize(r)
+	addr, _, _, err := s.Normalize(r)
 	if err != nil {
 		return err
 	}
@@ -122,7 +123,7 @@ func (s *Store) Set(r string, k *ecdh.PublicKey) error {
 
 // Clear removes the recipient and corresponding ecdh.PublicKey from the Store.
 func (s *Store) Clear(r string) error {
-	addr, err := s.Normalize(r)
+	addr, _, _, err := s.Normalize(r)
 	if err != nil {
 		return err
 	}

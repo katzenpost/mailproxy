@@ -43,11 +43,12 @@ type Proxy struct {
 	logBackend *log.Backend
 	log        *logging.Logger
 
-	accounts    *account.Store
-	authorities *authority.Store
-	recipients  *recipient.Store
-	popListener *popListener
-	management  *thwack.Server
+	accounts     *account.Store
+	authorities  *authority.Store
+	recipients   *recipient.Store
+	popListener  *popListener
+	smtpListener *smtpListener
+	management   *thwack.Server
 
 	fatalErrCh chan error
 	haltedCh   chan interface{}
@@ -92,7 +93,10 @@ func (p *Proxy) halt() {
 		p.popListener = nil
 	}
 
-	// XXX: Halt SMTP interface.
+	if p.smtpListener != nil {
+		p.smtpListener.Halt()
+		p.smtpListener = nil
+	}
 
 	if p.management != nil {
 		p.management.Halt()
@@ -193,16 +197,6 @@ func New(cfg *config.Config) (*Proxy, error) {
 		p.log.Debugf("Added authority '%v'.", k)
 	}
 
-	if !p.cfg.Debug.GenerateOnly {
-		// Bring the POP3 interface online.
-		if p.popListener, err = newPOPListener(p); err != nil {
-			p.log.Errorf("Failed to start POP3 listener: %v", err)
-			return nil, err
-		}
-
-		// XXX: Bring the SMTP interface online.
-	}
-
 	// Bring the accounts online.
 	p.accounts = account.NewStore(g)
 	for k, v := range p.cfg.AccountMap() {
@@ -213,8 +207,22 @@ func New(cfg *config.Config) (*Proxy, error) {
 		p.log.Debugf("Added account '%v'.", k)
 	}
 
+	// No need to bring the listeners online if we are going to terminate
+	// immediately.
 	if p.cfg.Debug.GenerateOnly {
 		return nil, ErrGenerateOnly
+	}
+
+	// Bring the POP3 interface online.
+	if p.popListener, err = newPOPListener(p); err != nil {
+		p.log.Errorf("Failed to start POP3 listener: %v", err)
+		return nil, err
+	}
+
+	// Bring the SMTP interface online.
+	if p.smtpListener, err = newSMTPListener(p); err != nil {
+		p.log.Errorf("Failed to start SMTP listener: %v", err)
+		return nil, err
 	}
 
 	// Start listening on the management if enabled, now that all subsystems
