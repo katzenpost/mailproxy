@@ -22,6 +22,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"io/ioutil"
 
 	"github.com/emersion/go-message"
 )
@@ -56,6 +57,15 @@ func BytesToEntity(b []byte) (*message.Entity, error) {
 	// but there's enough broken things out there that enforcing this will
 	// lead to problems, and the POP3 code should support arbitrary length
 	// lines.
+
+	// RFC 7103 6 - "Thus, it will typically be safe and helpful to treat an
+	// isolated CR or LF as equivalent to a CRLF when parsing a message."
+	body, err := ioutil.ReadAll(e.Body)
+	if err != nil {
+		return nil, fmt.Errorf("internal error reading message body")
+	}
+	body = ToCRLF(body)
+	e.Body = bytes.NewReader(body)
 
 	return e, nil
 }
@@ -92,4 +102,23 @@ func ValidateHeaders(e *message.Entity) error {
 		}
 	}
 	return nil
+}
+
+// ToCRLF attempts to canonicalize the buffer to have the IMF CRLF line endings
+// by converting `\n` octets not immediately preceeded by a `\r` to `\r\n`.
+func ToCRLF(b []byte) []byte {
+	var dst bytes.Buffer
+	dst.Grow(len(b))
+
+	wasCR := false
+	for _, c := range b {
+		if c == '\n' {
+			if !wasCR {
+				dst.WriteByte('\r')
+			}
+		}
+		wasCR = c == '\r'
+		dst.WriteByte(c)
+	}
+	return dst.Bytes()
 }
