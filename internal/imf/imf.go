@@ -20,11 +20,15 @@ package imf
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"io/ioutil"
+	"strconv"
+	"time"
 
 	"github.com/emersion/go-message"
+	"github.com/katzenpost/core/crypto/rand"
 )
 
 // SenderIdentityHeader is mail header containing the Base64 representation
@@ -121,4 +125,28 @@ func ToCRLF(b []byte) []byte {
 		dst.WriteByte(c)
 	}
 	return dst.Bytes()
+}
+
+// AddMessageID sets the `Message-ID` header if one is not already present in
+// the Entity's header block.
+func AddMessageID(e *message.Entity) {
+	const (
+		tsFmt           = "20060102150405"
+		messageIDHeader = "Message-ID"
+	)
+	if e.Header.Get(messageIDHeader) != "" {
+		return
+	}
+
+	// Generate one following the traditional way of doing such things, based
+	// on JWZ and Matt Curtin's IETF draft.
+	tsPart := time.Now().UTC().Format(tsFmt)
+
+	var randBytes [8]byte
+	io.ReadFull(rand.Reader, randBytes[:])
+	randUint := binary.LittleEndian.Uint64(randBytes[:])
+	randPart := strconv.FormatUint(randUint, 36)
+
+	msgID := "<" + tsPart + "." + randPart + "@katzenpost.localhost>"
+	e.Header.Set(messageIDHeader, msgID)
 }

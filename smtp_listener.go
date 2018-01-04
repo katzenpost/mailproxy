@@ -186,11 +186,29 @@ evLoop:
 				break evLoop
 			}
 		case smtpd.GOTDATA:
-			// XXX: Instead of ToCRLF this should parse the headers, so
-			// we can add our own.
-			payload := imf.ToCRLF([]byte(ev.Arg))
-			s.log.Debugf("DATA: %v", hex.Dump(payload))
+			entity, err := imf.BytesToEntity([]byte(ev.Arg))
+			if err != nil {
+				s.log.Errorf("Malformed IMF: %v", err)
+				env.Reset()
+				s.sConn.Reject()
+				break
+			}
 
+			// Add the headers that normal MTAs will too.
+			imf.AddMessageID(entity)
+			// XXX: Received header.
+
+			// Re-serialize the IMF message now to apply the new headers,
+			// and canonicalize the line endings.
+			payload, err := imf.EntityToBytes(entity)
+			if err != nil {
+				s.log.Errorf("Failed to re-serialize IMF: %v", err)
+				env.Reset()
+				s.sConn.Reject()
+				break
+			}
+
+			s.log.Debugf("DATA: %v", hex.Dump(payload))
 			env.SetPayload(payload)
 
 			// XXX: Do something with the completed envelope.
