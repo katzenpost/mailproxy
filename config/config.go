@@ -34,6 +34,7 @@ import (
 	"github.com/katzenpost/core/pki"
 	"github.com/katzenpost/core/utils"
 	"github.com/katzenpost/mailproxy/internal/authority"
+	"golang.org/x/net/idna"
 	"golang.org/x/text/secure/precis"
 )
 
@@ -117,10 +118,6 @@ type Debug struct {
 	// the Account `User` field.
 	CaseSensitiveUserIdentifiers bool
 
-	// CaseSensitiveProviderIdentifiers disables the forced lower casing of
-	// the Account `Provider` field.
-	CaseSensitiveProviderIdentifiers bool
-
 	// GenerateOnly halts and cleans up the mail proxy right after long term
 	// key generation.
 	GenerateOnly bool
@@ -191,13 +188,8 @@ func (accCfg *Account) fixup(cfg *Config) error {
 		return err
 	}
 
-	// Provider identifiers should basically always be case insensitive
-	// in the context of e-mail, because it serves as the `domain`
-	// component of the address.
-	if !cfg.Debug.CaseSensitiveProviderIdentifiers {
-		accCfg.Provider = strings.ToLower(accCfg.Provider)
-	}
-	return nil
+	accCfg.Provider, err = idna.Lookup.ToASCII(accCfg.Provider)
+	return err
 }
 
 func (accCfg *Account) toEmailAddr() (string, error) {

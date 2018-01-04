@@ -27,6 +27,7 @@ import (
 	"github.com/katzenpost/core/sphinx/constants"
 	"github.com/katzenpost/core/thwack"
 	"github.com/katzenpost/mailproxy/config"
+	"golang.org/x/net/idna"
 	"golang.org/x/text/secure/precis"
 )
 
@@ -43,8 +44,7 @@ type Store struct {
 
 	recipients map[string]*ecdh.PublicKey
 
-	caseSensitiveUsers     bool
-	caseSensitiveProviders bool
+	caseSensitiveUsers bool
 }
 
 // Normalize normalizes the provided recipient according to the rules specified
@@ -76,8 +76,9 @@ func (s *Store) Normalize(r string) (string, string, string, error) {
 	if err != nil {
 		return "", "", "", err
 	}
-	if !s.caseSensitiveProviders {
-		domain = strings.ToLower(domain)
+	domain, err = idna.Lookup.ToASCII(domain)
+	if err != nil {
+		return "", "", "", err
 	}
 
 	if len(local) > constants.RecipientIDLength {
@@ -196,7 +197,6 @@ func New(dCfg *config.Debug, t *thwack.Server) *Store {
 	s := new(Store)
 	s.recipients = make(map[string]*ecdh.PublicKey)
 	s.caseSensitiveUsers = dCfg.CaseSensitiveUserIdentifiers
-	s.caseSensitiveProviders = dCfg.CaseSensitiveProviderIdentifiers
 
 	// Register management commands.
 	if t != nil {
