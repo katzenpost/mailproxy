@@ -281,7 +281,7 @@ func (a *Account) onBlock(sender *ecdh.PublicKey, blk *block.Block) error {
 
 		// Update the timestamp.
 		var ts [8]byte
-		binary.BigEndian.PutUint64(ts[:], a.skewedNow())
+		binary.BigEndian.PutUint64(ts[:], a.nowUnix())
 		msgBkt.Put([]byte(lastRecvKey), ts[:])
 
 		a.log.Debugf("Stored Block: %v.", blkToStr(sender, blk))
@@ -299,7 +299,7 @@ func (a *Account) testDuplicate(recvBkt *bolt.Bucket, msgID []byte, testAndSet b
 		// continue to ignore spurious retransmissions while the peer
 		// continues to send them.
 		var ts [8]byte
-		binary.BigEndian.PutUint64(ts[:], a.skewedNow())
+		binary.BigEndian.PutUint64(ts[:], a.nowUnix())
 		dedupBkt.Put(msgID, ts[:])
 	}
 
@@ -433,7 +433,7 @@ func (a *Account) doDedupGC() {
 	a.Lock()
 	defer a.Unlock()
 
-	now := a.skewedNow()
+	now := a.nowUnix()
 	deltaT := now - a.lastDedupGC
 	if deltaT < gcIntervalSec && now > a.lastDedupGC {
 		// Don't do the GC pass all that frequently.

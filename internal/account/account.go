@@ -180,18 +180,8 @@ func (a *Account) onACK(surbID *[constants.SURBIDLength]byte, payload []byte) er
 	return nil
 }
 
-func (a *Account) skewedNow() uint64 {
-	// Calls to this should only happen if the connection's been established
-	// at least once, which for now is guaranteed by virute of this only
-	// happening in the onBlock callback....
-	//
-	// Though this is subject to change for GC related reasons. :(
-
-	if a.client == nil {
-		// Can't get a coherent skewed time, if the client doesn't exist.
-		return uint64(time.Now().Unix())
-	}
-	return uint64(time.Now().Add(a.client.ClockSkew()).Unix())
+func (a *Account) nowUnix() uint64 {
+	return uint64(time.Now().Unix())
 }
 
 func (s *Store) newAccount(id string, cfg *config.Account) (*Account, error) {
