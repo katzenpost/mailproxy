@@ -16,26 +16,88 @@
 
 package account
 
-import ()
+import (
+	"math"
+	"time"
+
+	"github.com/katzenpost/core/crypto/rand"
+)
 
 type workerOp interface{}
-type opMaybeGC struct{}
+
+type opIsEmpty struct{}
+
+type opConnStatusChanged struct {
+	isConnected bool
+}
 
 func (a *Account) worker() {
+	const maxDuration = math.MaxInt64
+
+	tau := a.s.cfg.Debug.TransmitTau
+	mRng := rand.NewMath()
+	isConnected := false
+	wakeInterval := time.Duration(maxDuration)
+	timer := time.NewTimer(wakeInterval)
+	defer timer.Stop()
+
 	for {
+		var timerFired bool
 		var qo workerOp
 		select {
 		case <-a.HaltCh():
 			return
+		case <-timer.C:
+			timerFired = true
 		case qo = <-a.opCh:
 		}
 
-		switch op := qo.(type) {
-		case *opMaybeGC:
-			a.doDedupGC()
-		default:
-			a.log.Warningf("BUG: Worker received nonsensical op: %T", op)
+		if timerFired {
+			// It is time to send another block if one exists.
+			if isConnected { // Suppress spurious wakeups.
+				if err := a.sendNextBlock(); err != nil {
+					a.log.Warningf("Failed to send queued block: %v", err)
+				}
+			}
+		} else {
+			switch op := qo.(type) {
+			case *opIsEmpty:
+				a.emptyAt = time.Now()
+				a.doDedupGC()
+				a.doSendGC()
+				continue
+			case *opConnStatusChanged:
+				if isConnected = op.isConnected; isConnected {
+					a.onlineAt = time.Now()
+				}
+			default:
+				a.log.Warningf("BUG: Worker received nonsensical op: %T", op)
+			}
 		}
+		if isConnected {
+			// In a perfect world, this would probably send both cover
+			// traffic and payload at a fixed interval.  However I currently
+			// view this as impractical for a few reasons.
+			//
+			//  * It is unclear to me what a good "fixed" interval will be
+			//    such that sufficient useful cover traffic is generated,
+			//    while neither overloading the network nor making mobile
+			//    users cry, while allowing for sufficient goodput.
+			//
+			//  * Fixed intervals leak information via the jitter.
+			//
+			// Until someone comes up with satesfactory answers to both
+			// questions, an alternate strategy will be used that attempts
+			// to mimimize information leakage, while also being capable
+			// of being tuned as required.
+			wakeInterval = time.Duration(tau+mRng.Intn(tau*2)) * time.Millisecond
+		} else {
+			wakeInterval = maxDuration
+		}
+		if !timerFired && !timer.Stop() {
+			<-timer.C
+		}
+		timer.Reset(wakeInterval)
 	}
 
 	// NOTREACHED

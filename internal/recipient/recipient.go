@@ -76,15 +76,13 @@ func (s *Store) Normalize(r string) (string, string, string, error) {
 	if err != nil {
 		return "", "", "", err
 	}
+	if len(local) > constants.RecipientIDLength {
+		return "", "", "", errOversizedLocal
+	}
 	domain, err = idna.Lookup.ToASCII(domain)
 	if err != nil {
 		return "", "", "", err
 	}
-
-	if len(local) > constants.RecipientIDLength {
-		return "", "", "", errOversizedLocal
-	}
-	// XXX: Validate domain according to the host name rules.
 
 	return local + "@" + domain, local, domain, nil
 }
@@ -192,7 +190,7 @@ func (s *Store) onRemoveRecipient(c *thwack.Conn, l string) error {
 	return c.WriteReply(thwack.StatusOk)
 }
 
-// NewStore constructs a new Store instance.
+// New constructs a new Store instance.
 func New(dCfg *config.Debug, t *thwack.Server) *Store {
 	s := new(Store)
 	s.recipients = make(map[string]*ecdh.PublicKey)

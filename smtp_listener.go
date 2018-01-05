@@ -18,12 +18,11 @@ package mailproxy
 
 import (
 	"bytes"
-	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"sync/atomic"
 
-	"github.com/katzenpost/core/crypto/ecdh"
 	"github.com/katzenpost/core/worker"
 	"github.com/katzenpost/mailproxy/internal/account"
 	"github.com/katzenpost/mailproxy/internal/imf"
@@ -31,11 +30,15 @@ import (
 	"github.com/siebenmann/smtpd"
 )
 
-var smtpdCfg = smtpd.Config{
-	LocalName: "katzenpost.localhost",
-	SftName:   "Katzenpost",
-	SayTime:   false,
-}
+var (
+	smtpdCfg = smtpd.Config{
+		LocalName: imf.LocalName,
+		SftName:   "Katzenpost",
+		SayTime:   false,
+	}
+
+	errEnqueueAllFailed = errors.New("enqueue failed for ALL recipients, rejecting")
+)
 
 type smtpListener struct {
 	worker.Worker
@@ -121,6 +124,7 @@ func (s *smtpSession) worker() {
 	env := &smtpEnvelope{}
 	defer env.Reset() // This holds an account.Account, which is refcounted.
 
+	var viaESMTP bool
 evLoop:
 	for {
 		ev := s.sConn.Next()
@@ -142,6 +146,14 @@ evLoop:
 			// can just accumulate based on the command, resetting
 			// as appropriate.
 			switch ev.Cmd {
+			case smtpd.HELO:
+				viaESMTP = false
+				env.Reset()
+			case smtpd.EHLO:
+				viaESMTP = true
+				env.Reset()
+			case smtpd.RSET:
+				env.Reset()
 			case smtpd.MAILFROM:
 				accID, _, _, err := s.l.p.recipients.Normalize(ev.Arg)
 				if err != nil {
@@ -164,13 +176,13 @@ evLoop:
 					s.sConn.Reject()
 					break
 				}
-				rcpt := &smtpRecipient{
-					id:        rcptID,
-					recipient: local,
-					provider:  domain,
-					pubKey:    s.l.p.recipients.Get(rcptID),
+				rcpt := &account.Recipient{
+					ID:        rcptID,
+					User:      local,
+					Provider:  domain,
+					PublicKey: s.l.p.recipients.Get(rcptID),
 				}
-				if rcpt.pubKey == nil {
+				if rcpt.PublicKey == nil {
 					s.log.Warningf("RCPT TO ('%v') does not specify a known recipient.", rcptID)
 					s.sConn.Reject()
 					break
@@ -178,15 +190,13 @@ evLoop:
 				s.log.Debugf("Added recipient: '%v'", rcptID)
 				env.AddRecipient(rcpt)
 			case smtpd.DATA:
-			case smtpd.HELO, smtpd.EHLO, smtpd.RSET:
-				env.Reset()
 			default:
 				s.log.Errorf("Invalid command: %v", ev.Cmd)
 				s.sConn.Reject()
 				break evLoop
 			}
 		case smtpd.GOTDATA:
-			if err := s.onGotData(env, []byte(ev.Arg)); err != nil {
+			if err := s.onGotData(env, []byte(ev.Arg), viaESMTP); err != nil {
 				s.log.Errorf("Failed to handle received message: %v", err)
 				s.sConn.Reject()
 			}
@@ -199,17 +209,24 @@ evLoop:
 	s.log.Debugf("Connection terminated.")
 }
 
-func (s *smtpSession) onGotData(env *smtpEnvelope, b []byte) error {
+func (s *smtpSession) onGotData(env *smtpEnvelope, b []byte, viaESMTP bool) error {
 	defer env.Reset()
 
+	// De-duplicate the recipients.
+	env.DedupRecipients()
+	if len(env.recipients) == 0 {
+		return nil
+	}
+
+	// Parse the message payload so that headers can be manipulated,
+	// and ensure that there is a Message-ID header, and prepend the
+	// "Received" header.
 	entity, err := imf.BytesToEntity(b)
 	if err != nil {
 		return err
 	}
-
-	// Add the headers that normal MTAs will too.
 	imf.AddMessageID(entity)
-	// XXX: Received header.
+	imf.AddReceived(entity, true, viaESMTP)
 
 	// Re-serialize the IMF message now to apply the new headers,
 	// and canonicalize the line endings.
@@ -218,13 +235,35 @@ func (s *smtpSession) onGotData(env *smtpEnvelope, b []byte) error {
 		return err
 	}
 
-	s.log.Debugf("DATA: %v", hex.Dump(payload))
-	env.SetPayload(payload)
+	// TODO: It is probably worth grouping all recipients of a given message
+	// into a single send queue entry instead of creating a queue entry for
+	// each recipient, but this is a far more simple approach, and unlike
+	// traditional MTAs, mailproxy is only going to be servicing a single
+	// user with a comparatively low volume of mail anyway.
+	failedRecipients := make(map[string]error)
+	for _, recipient := range env.recipients {
+		// Add the message to the send queue.
+		if err = env.account.EnqueueMessage(recipient, payload); err != nil {
+			s.log.Errorf("Failed to enqueue for '%v': %v", recipient, err)
+			failedRecipients[recipient.ID] = err
+			continue
+		}
+	}
 
-	// XXX: Do something with the completed envelope.
-	env.DedupRecipients()
-
-	return nil
+	switch len(failedRecipients) {
+	case 0:
+		return nil
+	case len(env.recipients):
+		// Technically I think I'm supposed to create a bounce message,
+		// but that's silly when I can just reject the SMTP transaction.
+		//
+		// LMTP fully supports rejecting at send time on a per-recipient
+		// basis, but we need to use SMTP, unfortunately.
+		return errEnqueueAllFailed
+	default:
+	}
+	// XXX: Generate a bounce message.
+	return errors.New("BUG: One or more failures in enqueue, bounce not implemented yet, check logs")
 }
 
 func (s *smtpSession) Write(p []byte) (n int, err error) {
@@ -259,17 +298,9 @@ func (s *smtpSession) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-type smtpRecipient struct {
-	id        string
-	recipient string
-	provider  string
-	pubKey    *ecdh.PublicKey
-}
-
 type smtpEnvelope struct {
 	account    *account.Account
-	recipients []*smtpRecipient
-	payload    []byte
+	recipients []*account.Recipient
 }
 
 func (e *smtpEnvelope) SetAccount(a *account.Account) {
@@ -279,21 +310,17 @@ func (e *smtpEnvelope) SetAccount(a *account.Account) {
 	e.account = a
 }
 
-func (e *smtpEnvelope) SetPayload(p []byte) {
-	e.payload = p
-}
-
-func (e *smtpEnvelope) AddRecipient(r *smtpRecipient) {
+func (e *smtpEnvelope) AddRecipient(r *account.Recipient) {
 	e.recipients = append(e.recipients, r)
 }
 
 func (e *smtpEnvelope) DedupRecipients() {
-	newR := make([]*smtpRecipient, 0, len(e.recipients))
+	newR := make([]*account.Recipient, 0, len(e.recipients))
 
 	dedupMap := make(map[string]bool)
 	for _, v := range e.recipients {
-		if !dedupMap[v.id] {
-			dedupMap[v.id] = true
+		if !dedupMap[v.ID] {
+			dedupMap[v.ID] = true
 			newR = append(newR, v)
 		}
 	}
@@ -303,5 +330,4 @@ func (e *smtpEnvelope) DedupRecipients() {
 func (e *smtpEnvelope) Reset() {
 	e.SetAccount(nil)
 	e.recipients = nil
-	e.SetPayload(nil)
 }

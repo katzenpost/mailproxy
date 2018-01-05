@@ -39,10 +39,13 @@ import (
 )
 
 const (
-	defaultPOP3Addr         = "127.0.0.1:2524"
-	defaultSMTPAddr         = "127.0.0.1:2525"
-	defaultLogLevel         = "NOTICE"
-	defaultManagementSocket = "management_sock"
+	defaultPOP3Addr            = "127.0.0.1:2524"
+	defaultSMTPAddr            = "127.0.0.1:2525"
+	defaultLogLevel            = "NOTICE"
+	defaultManagementSocket    = "management_sock"
+	defaultBounceQueueLifetime = 432000 // 5 days.
+	defaultRetransmitSlack     = 300    // 5 minutes.
+	defaultTransmitTau         = 5000   // 5 seconds. (TODO: Tune this.)
 )
 
 var defaultLogging = Logging{
@@ -114,6 +117,20 @@ func (lCfg *Logging) validate() error {
 
 // Debug is the mail proxy debug configuration.
 type Debug struct {
+	// BounceQueueLifetime is the minimum time in seconds till the mail
+	// proxy will give up on sending a particular e-mail.
+	BounceQueueLifetime int
+
+	// RetransmitSlack is the extra time in seconds added to account for
+	// various delays such as latency and the fetch scheduler before
+	// a block will be retransmitted.  Reducing this WILL result in
+	// worse performance, increased spurrious retransmissions, and
+	// unneccecary load on the network.
+	RetransmitSlack int
+
+	// TransmitTau is the magic send scheduling tuning parameter.
+	TransmitTau int
+
 	// CaseSensitiveUserIdentifiers disables the forced lower casing of
 	// the Account `User` field.
 	CaseSensitiveUserIdentifiers bool
@@ -121,6 +138,18 @@ type Debug struct {
 	// GenerateOnly halts and cleans up the mail proxy right after long term
 	// key generation.
 	GenerateOnly bool
+}
+
+func (dCfg *Debug) applyDefaults() {
+	if dCfg.BounceQueueLifetime <= 0 {
+		dCfg.BounceQueueLifetime = defaultBounceQueueLifetime
+	}
+	if dCfg.RetransmitSlack <= 0 {
+		dCfg.RetransmitSlack = defaultRetransmitSlack
+	}
+	if dCfg.TransmitTau <= 0 {
+		dCfg.TransmitTau = defaultTransmitTau
+	}
 }
 
 // NonvotingAuthority is a non-voting authority configuration.
@@ -285,6 +314,7 @@ func (cfg *Config) FixupAndValidate() error {
 	if cfg.Debug == nil {
 		cfg.Debug = &Debug{}
 	}
+	cfg.Debug.applyDefaults()
 	if cfg.Recipients == nil {
 		cfg.Recipients = make(map[string]*ecdh.PublicKey)
 	}

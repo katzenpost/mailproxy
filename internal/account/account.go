@@ -27,7 +27,6 @@ import (
 	bolt "github.com/coreos/bbolt"
 	"github.com/katzenpost/core/crypto/ecdh"
 	"github.com/katzenpost/core/crypto/rand"
-	"github.com/katzenpost/core/sphinx/constants"
 	"github.com/katzenpost/core/utils"
 	"github.com/katzenpost/core/worker"
 	"github.com/katzenpost/mailproxy/config"
@@ -58,7 +57,10 @@ type Account struct {
 	refCount int32
 
 	opCh        chan workerOp
+	onlineAt    time.Time
+	emptyAt     time.Time
 	lastDedupGC uint64
+	lastSendGC  uint64
 }
 
 // Deref decrements the reference count of the Account.  If the reference count
@@ -146,13 +148,16 @@ func (a *Account) initKeys(cfg *config.Account) error {
 
 func (a *Account) onConn(isConnected bool) {
 	a.log.Debugf("onConn(%v)", isConnected)
+
+	// Wake up the worker so it can adjust it's send scheduling.
+	a.opCh <- &opConnStatusChanged{isConnected}
 }
 
 func (a *Account) onEmpty() error {
 	a.log.Debugf("onEmpty()")
 
-	// Schedule GC cycles if appropriate, but not in the callback context.
-	a.opCh <- &opMaybeGC{}
+	// Call into the worker to update the state.
+	a.opCh <- &opIsEmpty{}
 
 	return nil
 }
@@ -174,10 +179,6 @@ func (a *Account) onMessage(msg []byte) error {
 	// Store the block.  The DB code handles reassembly and shunting messages
 	// to the POP3 account's spool.
 	return a.onBlock(sender, blk)
-}
-
-func (a *Account) onACK(surbID *[constants.SURBIDLength]byte, payload []byte) error {
-	return nil
 }
 
 func (a *Account) nowUnix() uint64 {
@@ -231,7 +232,7 @@ func (s *Store) newAccount(id string, cfg *config.Account) (*Account, error) {
 		OnConnFn:       a.onConn,
 		OnEmptyFn:      a.onEmpty,
 		OnMessageFn:    a.onMessage,
-		OnACKFn:        a.onACK,
+		OnACKFn:        a.onSURB, // Defined in send.go.
 	}
 
 	var err error

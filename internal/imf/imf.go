@@ -21,6 +21,7 @@ package imf
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -31,10 +32,17 @@ import (
 	"github.com/katzenpost/core/crypto/rand"
 )
 
-// SenderIdentityHeader is mail header containing the Base64 representation
-// of the sender's public key, set by the recipient upon successfully receiving
-// a message.
-const SenderIdentityHeader = "X-Katzenpost-Sender-Identity-Key"
+const (
+	// SenderIdentityHeader is mail header containing the Base64 representation
+	// of the sender's public key, set by the recipient upon successfully
+	// receiving a message.
+	SenderIdentityHeader = "X-Katzenpost-Sender-Identity-Key"
+
+	// LocalName is the common hostname used by mail proxy instances.
+	LocalName = "katzenpost.localhost"
+
+	dateFmt = "Mon, 02 Jan 2006 15:04:05 -0700 (UTC)"
+)
 
 var proscribedHeaders = []string{
 	SenderIdentityHeader,
@@ -147,6 +155,32 @@ func AddMessageID(e *message.Entity) {
 	randUint := binary.LittleEndian.Uint64(randBytes[:])
 	randPart := strconv.FormatUint(randUint, 36)
 
-	msgID := "<" + tsPart + "." + randPart + "@katzenpost.localhost>"
+	msgID := "<" + tsPart + "." + randPart + "@" + LocalName + ">"
 	e.Header.Set(messageIDHeader, msgID)
+}
+
+// AddReceived prepends a `Received` header entry based on the supplied
+// position and protocol.
+func AddReceived(e *message.Entity, isMSA bool, viaESMTP bool) {
+	const receivedHeader = "Received"
+
+	var hdrStr string
+	if isMSA {
+		hdrStr = "from localhost (localhost [127.0.0.1]) "
+	} else {
+		hdrStr = "from mixnetwork.invalid (mixnetwork.invalid [127.0.0.2]) "
+	}
+	hdrStr += "by " + LocalName + " (Katzenpost mailproxy) "
+	if viaESMTP {
+		hdrStr += "with ESMTP "
+	} else {
+		hdrStr += "with SMTP "
+	}
+
+	var randID [5]byte
+	io.ReadFull(rand.Reader, randID[:])
+	hdrStr += "id " + hex.EncodeToString(randID[:]) + " "
+	hdrStr += "for <recipient@anonymous.invalid>; " + time.Now().UTC().Format(dateFmt)
+
+	e.Header[receivedHeader] = append([]string{hdrStr}, e.Header[receivedHeader]...)
 }
