@@ -195,15 +195,29 @@ type Account struct {
 	// Authority is the authority configuration used by this Account.
 	Authority string
 
-	// ForceLinkKey specifies a hex encoded link authentication private
-	// key, primarily for automated testing.  Usage of this option is
-	// STRONGLY discouraged.
-	ForceLinkKey string
+	forcedLinkKey     *ecdh.PrivateKey
+	forcedIdentityKey *ecdh.PrivateKey
+}
 
-	// ForceIdentityKey specifies a hex encoded identity private key,
-	// primarily for automated testing.  Usage of this option is STRONGLY
-	// discouraged.
-	ForceIdentityKey string
+// ForcedLinkKey returns the Account's overridden link key if any.
+func (accCfg *Account) ForcedLinkKey() *ecdh.PrivateKey {
+	return accCfg.forcedLinkKey
+}
+
+// SetForcedLinkKey sets the Account's link key to an existing private key.
+func (accCfg *Account) SetForcedLinkKey(k *ecdh.PrivateKey) {
+	accCfg.forcedLinkKey = k
+}
+
+// ForcedIdentityKey returns the Account's overridden identity key if any.
+func (accCfg *Account) ForcedIdentityKey() *ecdh.PrivateKey {
+	return accCfg.forcedIdentityKey
+}
+
+// SetForcedIdentityKey sets the Account's identity key to an existing private
+// key.
+func (accCfg *Account) SetForcedIdentityKey(k *ecdh.PrivateKey) {
+	accCfg.forcedIdentityKey = k
 }
 
 func (accCfg *Account) fixup(cfg *Config) error {

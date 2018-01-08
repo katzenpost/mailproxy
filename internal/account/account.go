@@ -17,10 +17,7 @@
 package account
 
 import (
-	"encoding/hex"
-	"fmt"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -120,13 +117,8 @@ func (a *Account) doCleanup() {
 func (a *Account) initKeys(cfg *config.Account) error {
 	var err error
 
-	// WARNING: Using the Force[Link,Encryption]Key options is a bad idea
-	// unless you know what you are doing.
-
-	if cfg.ForceLinkKey != "" {
-		if a.linkKey, err = privKeyFromString(cfg.ForceLinkKey); err != nil {
-			return err
-		}
+	if k := cfg.ForcedLinkKey(); k != nil {
+		a.linkKey = k
 	} else {
 		linkPriv := filepath.Join(a.basePath, "link.private.pem")
 		linkPub := filepath.Join(a.basePath, "link.public.pem")
@@ -136,8 +128,8 @@ func (a *Account) initKeys(cfg *config.Account) error {
 		}
 	}
 
-	if cfg.ForceIdentityKey != "" {
-		a.identityKey, err = privKeyFromString(cfg.ForceIdentityKey)
+	if k := cfg.ForcedIdentityKey(); k != nil {
+		a.identityKey = k
 	} else {
 		idPriv := filepath.Join(a.basePath, "identity.private.pem")
 		idPub := filepath.Join(a.basePath, "identity.public.pem")
@@ -253,19 +245,4 @@ func (s *Store) newAccount(id string, cfg *config.Account) (*Account, error) {
 
 	isOk = true
 	return a, nil
-}
-
-func privKeyFromString(s string) (*ecdh.PrivateKey, error) {
-	s = strings.TrimSpace(s)
-	raw, err := hex.DecodeString(s)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse key: %v", err)
-	}
-	defer utils.ExplicitBzero(raw) // Sort of pointless because of strings.
-
-	k := new(ecdh.PrivateKey)
-	if err = k.FromBytes(raw); err != nil {
-		return nil, err
-	}
-	return k, nil
 }
