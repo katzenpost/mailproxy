@@ -68,7 +68,21 @@ func (a *Account) worker() {
 				continue
 			case *opConnStatusChanged:
 				if isConnected = op.isConnected; isConnected {
+					const skewWarnDelta = 2 * time.Minute
 					a.onlineAt = time.Now()
+
+					skew := a.client.ClockSkew()
+					absSkew := skew
+					if absSkew < 0 {
+						absSkew = -absSkew
+					}
+					if absSkew > skewWarnDelta {
+						// Should this do more than just warn?  Should this
+						// use skewed time?  I don't know.
+						a.log.Warningf("The observed time difference between the host and provider clocks is '%v'.  Correct your system time.", skew)
+					} else {
+						a.log.Debugf("Clock skew vs provider: %v", skew)
+					}
 				}
 			default:
 				a.log.Warningf("BUG: Worker received nonsensical op: %T", op)

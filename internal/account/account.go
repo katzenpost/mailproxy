@@ -223,16 +223,17 @@ func (s *Store) newAccount(id string, cfg *config.Account) (*Account, error) {
 
 	// Configure and bring up the minclient instance.
 	clientCfg := &minclient.ClientConfig{
-		User:           cfg.User,
-		Provider:       cfg.Provider,
-		ProviderKeyPin: cfg.ProviderKeyPin,
-		LinkKey:        a.linkKey,
-		LogBackend:     s.logBackend,
-		PKIClient:      nil, // Set later.
-		OnConnFn:       a.onConn,
-		OnEmptyFn:      a.onEmpty,
-		OnMessageFn:    a.onMessage,
-		OnACKFn:        a.onSURB, // Defined in send.go.
+		User:            cfg.User,
+		Provider:        cfg.Provider,
+		ProviderKeyPin:  cfg.ProviderKeyPin,
+		LinkKey:         a.linkKey,
+		LogBackend:      s.logBackend,
+		PKIClient:       nil, // Set later.
+		OnConnFn:        a.onConn,
+		OnEmptyFn:       a.onEmpty,
+		OnMessageFn:     a.onMessage,
+		OnACKFn:         a.onSURB, // Defined in send.go.
+		DisableTimeSync: true,
 	}
 
 	var err error
