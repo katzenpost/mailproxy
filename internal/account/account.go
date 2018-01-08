@@ -47,6 +47,7 @@ type Account struct {
 
 	linkKey     *ecdh.PrivateKey
 	identityKey *ecdh.PrivateKey
+	storageKey  *ecdh.PrivateKey
 
 	popSession *popSession
 
@@ -112,13 +113,19 @@ func (a *Account) doCleanup() {
 
 	a.linkKey.Reset()
 	a.identityKey.Reset()
+	if a.storageKey != nil {
+		a.storageKey.Reset()
+	}
 }
 
 func (a *Account) initKeys(cfg *config.Account) error {
 	var err error
 
 	if k := cfg.ForcedLinkKey(); k != nil {
-		a.linkKey = k
+		a.linkKey = new(ecdh.PrivateKey)
+		if err = a.linkKey.FromBytes(k.Bytes()); err != nil {
+			return err
+		}
 	} else {
 		linkPriv := filepath.Join(a.basePath, "link.private.pem")
 		linkPub := filepath.Join(a.basePath, "link.public.pem")
@@ -129,12 +136,23 @@ func (a *Account) initKeys(cfg *config.Account) error {
 	}
 
 	if k := cfg.ForcedIdentityKey(); k != nil {
-		a.identityKey = k
+		a.identityKey = new(ecdh.PrivateKey)
+		if err = a.identityKey.FromBytes(k.Bytes()); err != nil {
+			return err
+		}
 	} else {
 		idPriv := filepath.Join(a.basePath, "identity.private.pem")
 		idPub := filepath.Join(a.basePath, "identity.public.pem")
 		a.identityKey, err = ecdh.Load(idPriv, idPub, rand.Reader)
 	}
+
+	if k := cfg.StorageKey(); k != nil {
+		a.storageKey = new(ecdh.PrivateKey)
+		if err = a.storageKey.FromBytes(k.Bytes()); err != nil {
+			return err
+		}
+	}
+
 	return err
 }
 

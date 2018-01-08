@@ -36,7 +36,7 @@ package account
 //       - "lastACK"   - The last ACK unix time (uint64).
 //       - "waitTill"  - The retransmit unix time (Stop-And-Wait, uint64).
 //       - "bounceAt"  - The earliest bounce unix time (uint64).
-//       - "plaintext" - The message plaintext.
+//       - "plaintext" - The message plaintext (Optionally encrypted).
 //       - "blocks"    - The blocks belonging to this message.
 //         - blockID - A queued block. (uint64 Block ID keys).
 //
@@ -156,7 +156,7 @@ func (a *Account) EnqueueMessage(recipient *Recipient, msg []byte) error {
 		msgBkt.Put([]byte(userKey), []byte(recipient.User))
 		msgBkt.Put([]byte(providerKey), []byte(recipient.Provider))
 		msgBkt.Put([]byte(bounceAtKey), ts)
-		msgBkt.Put([]byte(plaintextKey), msg)
+		a.dbEncryptAndPut(msgBkt, []byte(plaintextKey), msg)
 
 		// Insert the blocks.
 		blocksBkt, err := msgBkt.CreateBucketIfNotExists([]byte(blocksBucket))

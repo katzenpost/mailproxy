@@ -23,6 +23,7 @@ package account
 //
 // - "metadata"  - Per-file metadata.
 //   - "version"     - File format version (0x00).
+//   - "publicKey"   - File encryption public key if ever set.
 // - "receive"   - Receive related buckets.
 // - "send"      - Send related buckets.
 //
@@ -39,12 +40,16 @@ import (
 	"path/filepath"
 
 	bolt "github.com/coreos/bbolt"
+	"github.com/katzenpost/core/crypto/ecdh"
+	"github.com/katzenpost/core/crypto/rand"
+	"github.com/katzenpost/noise"
 )
 
 func (a *Account) initDatabase() error {
 	const (
 		metadataBucket = "metadata"
 		versionKey     = "version"
+		dbPublicKey    = "publicKey"
 	)
 
 	var err error
@@ -91,6 +96,21 @@ func (a *Account) initDatabase() error {
 				return fmt.Errorf("db: incompatible version: %v", b)
 			}
 
+			if b = recvBkt.Get([]byte(dbPublicKey)); b != nil {
+				var storePubKey ecdh.PublicKey
+				if err = storePubKey.FromBytes(b); err != nil {
+					return fmt.Errorf("db: failed to deserialize public key: %v", err)
+				}
+				if a.storageKey != nil {
+					return fmt.Errorf("db: encrypted database with no storage key configured")
+				}
+				if !a.storageKey.PublicKey().Equal(&storePubKey) {
+					return fmt.Errorf("db: provided storage key does not match the database")
+				}
+			} else if a.storageKey != nil {
+				return fmt.Errorf("db: storage key configured for unencrypted database")
+			}
+
 			// Restore state.
 			b = recvBkt.Get([]byte(lastDedupGCKey))
 			if len(b) == 8 {
@@ -105,6 +125,9 @@ func (a *Account) initDatabase() error {
 		}
 
 		bkt.Put([]byte(versionKey), []byte{0})
+		if a.storageKey != nil {
+			bkt.Put([]byte(dbPublicKey), a.storageKey.PublicKey().Bytes())
+		}
 		return nil
 	})
 	if err != nil {
@@ -112,6 +135,60 @@ func (a *Account) initDatabase() error {
 		a.db = nil
 	}
 	return err
+}
+
+func (a *Account) dbEncryptAndPut(bkt *bolt.Bucket, key, value []byte) error {
+	if a.storageKey == nil {
+		return bkt.Put(key, value)
+	}
+
+	hs := a.newDBCryptoState(false)
+	ciphertext, _, _ := hs.WriteMessage(nil, value)
+	return bkt.Put(key, ciphertext)
+}
+
+func (a *Account) dbGetAndDecrypt(bkt *bolt.Bucket, key []byte) []byte {
+	if a.storageKey == nil {
+		return bkt.Get(key)
+	}
+
+	return a.dbDecrypt(bkt.Get(key))
+}
+
+func (a *Account) dbDecrypt(ciphertext []byte) []byte {
+	if a.storageKey == nil {
+		// Presumably this is stored in the clear.
+		return ciphertext
+	}
+	if ciphertext == nil {
+		return nil
+	}
+	hs := a.newDBCryptoState(true)
+	plaintext, _, _, err := hs.ReadMessage(nil, ciphertext)
+	if err != nil {
+		panic("dbEncryptedGet: decryption failed: " + err.Error())
+	}
+	return plaintext
+}
+
+func (a *Account) newDBCryptoState(forDecrypt bool) *noise.HandshakeState {
+	cs := noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashSHA256)
+	cfg := noise.Config{
+		CipherSuite: cs,
+		Random:      rand.Reader,
+		Pattern:     noise.HandshakeN,
+		Initiator:   !forDecrypt,
+	}
+	if forDecrypt {
+		cfg.StaticKeypair = noise.DHKey{
+			Private: a.storageKey.Bytes(),
+			Public:  a.storageKey.PublicKey().Bytes(),
+		}
+	} else {
+		cfg.PeerStatic = a.storageKey.PublicKey().Bytes()
+	}
+
+	return noise.NewHandshakeState(cfg)
 }
 
 func uint64ToBytes(i uint64) []byte {

@@ -197,6 +197,7 @@ type Account struct {
 
 	forcedLinkKey     *ecdh.PrivateKey
 	forcedIdentityKey *ecdh.PrivateKey
+	storageKey        *ecdh.PrivateKey
 }
 
 // ForcedLinkKey returns the Account's overridden link key if any.
@@ -218,6 +219,18 @@ func (accCfg *Account) ForcedIdentityKey() *ecdh.PrivateKey {
 // key.
 func (accCfg *Account) SetForcedIdentityKey(k *ecdh.PrivateKey) {
 	accCfg.forcedIdentityKey = k
+}
+
+// StorageKey returns the optional per-Account database's encryption key if
+// any.
+func (accCfg *Account) StorageKey() *ecdh.PrivateKey {
+	return accCfg.storageKey
+}
+
+// SetStorageKey sets the optional per-Account database's encryption key to
+// an existing private key.
+func (accCfg *Account) SetStorageKey(k *ecdh.PrivateKey) {
+	accCfg.storageKey = k
 }
 
 func (accCfg *Account) fixup(cfg *Config) error {

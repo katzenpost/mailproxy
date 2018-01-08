@@ -27,9 +27,11 @@ package account
 //       - "totalBlocks"    - Total blocks in the message (uint64).
 //       - "receivedBlocks" - Number of blocks received so far (uint64).
 //       - "lastRecv"       - The last forward-progress unix time (uint64).
-//       - blockID          - A received block. (uint64 Block ID keys).
-//   - "spool"      - Messages ready for the user (POP3 spool).
-//     - `seqNR` - A message (BoltDB's per-bucket sequence number).
+//       - blockID          - A received block. (uint64 Block ID keys.
+//                              Optionally encrypted).
+//   - "spool"       - Messages ready for the user (POP3 spool).
+//     - `seqNR` - A message (BoltDB's per-bucket sequence number.
+//                   Optionally encrypted).
 //   - "dedup"      - Message de-duplication.
 //     - senderPK | messageID   - The receive unix time (uint64).
 //     - SHA512/256(ciphertext) - Ditto, for failed decryptions.
@@ -120,6 +122,9 @@ func (a *Account) onBlock(sender *ecdh.PublicKey, blk *block.Block) error {
 		}
 
 		// Fast path for messages that do not require reassembly.
+		//
+		// XXX: Remove this when the reassembly is moved out of the
+		// transaction context.
 		if blk.TotalBlocks == 1 {
 			return a.storeRecvMessage(recvBkt, msgID, blk.Payload)
 		}
@@ -163,7 +168,9 @@ func (a *Account) onBlock(sender *ecdh.PublicKey, blk *block.Block) error {
 		if blk.Payload == nil {
 			blk.Payload = []byte{} // XXX: I hope BoltDB handles this.
 		}
-		msgBkt.Put(blockID, blk.Payload)
+		a.dbEncryptAndPut(msgBkt, blockID, blk.Payload)
+
+		// XXX: This should do the reassembly outside the transaction context.
 
 		// Update the message reassembly state.
 		var receivedBlocks []byte
@@ -175,7 +182,7 @@ func (a *Account) onBlock(sender *ecdh.PublicKey, blk *block.Block) error {
 				// if the reassembly process fails or not, we are done with
 				// this message, so we can omit updating any more metadata.
 
-				b, err = reassembleFragments(msgBkt, uint64(blk.TotalBlocks))
+				b, err = a.reassembleFragments(msgBkt, uint64(blk.TotalBlocks))
 				if err != nil {
 					// Reassembly failure.
 					//
@@ -283,7 +290,7 @@ func (a *Account) storeMessage(recvBkt *bolt.Bucket, payload []byte) error {
 
 	// Store the message as the next sequence number.
 	seq, _ := spoolBkt.NextSequence()
-	spoolBkt.Put(uint64ToBytes(seq), payload)
+	a.dbEncryptAndPut(spoolBkt, uint64ToBytes(seq), payload)
 
 	return nil
 }
@@ -320,9 +327,10 @@ func (a *Account) newPOPSession() (pop3.BackendSession, error) {
 		for k, v := cur.First(); k != nil; k, v = cur.Next() {
 			s.sequenceMap[idx] = binary.BigEndian.Uint64(k)
 
-			// Copy, v is invalidate at the end of the transaction.
-			msg := make([]byte, 0, len(v))
-			msg = append(msg, v...)
+			// Copy, v is invalidated at the end of the transaction.
+			pt := a.dbDecrypt(v) // Can return v as is, DO NOT REMOVE THE COPY.
+			msg := make([]byte, 0, len(pt))
+			msg = append(msg, pt...)
 			s.messages = append(s.messages, msg)
 			idx++
 		}
@@ -383,8 +391,8 @@ func (a *Account) doDedupGC() {
 	a.log.Debugf("Finished de-duplication cache GC cycle: %v/%v pruned.", deleted, examined)
 }
 
-func reassembleFragments(bkt *bolt.Bucket, totalBlocks uint64) ([]byte, error) {
-	b := make([]byte, 0, block.BlockPayloadLength*totalBlocks)
+func (a *Account) reassembleFragments(bkt *bolt.Bucket, totalBlocks uint64) ([]byte, error) {
+	fragments := make([][]byte, 0, totalBlocks)
 	for i := uint64(0); i < totalBlocks; i++ {
 		p := bkt.Get(uint64ToBytes(i))
 		if p == nil {
@@ -392,7 +400,12 @@ func reassembleFragments(bkt *bolt.Bucket, totalBlocks uint64) ([]byte, error) {
 			// has a 0 length payload.
 			return nil, fmt.Errorf("reassembly failure: block %v/%v missing", i, totalBlocks)
 		}
-		b = append(b, p...)
+		fragments = append(fragments, p)
+	}
+
+	b := make([]byte, 0, block.BlockPayloadLength*totalBlocks)
+	for _, v := range fragments {
+		b = append(b, a.dbDecrypt(v)...)
 	}
 	return b, nil
 }
