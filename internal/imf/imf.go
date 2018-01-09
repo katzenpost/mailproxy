@@ -36,7 +36,7 @@ const (
 	// SenderIdentityHeader is mail header containing the Base64 representation
 	// of the sender's public key, set by the recipient upon successfully
 	// receiving a message.
-	SenderIdentityHeader = "X-Katzenpost-Sender-Identity-Key"
+	SenderIdentityHeader = "X-Katzenpost-Sender"
 
 	// LocalName is the common hostname used by mail proxy instances.
 	LocalName = "katzenpost.localhost"
