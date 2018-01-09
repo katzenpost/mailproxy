@@ -70,6 +70,9 @@ func (a *Account) initDatabase() error {
 		if err != nil {
 			return err
 		}
+		if _, err := recvBkt.CreateBucketIfNotExists([]byte(pendingBlocksKey)); err != nil {
+			return err
+		}
 		if _, err := recvBkt.CreateBucketIfNotExists([]byte(fragsBucket)); err != nil {
 			return err
 		}

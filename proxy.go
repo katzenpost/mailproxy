@@ -250,3 +250,7 @@ func (g *proxyGlue) LogBackend() *log.Backend {
 func (g *proxyGlue) Authorities() *authority.Store {
 	return g.p.authorities
 }
+
+func (g *proxyGlue) FatalErrCh() chan<- error {
+	return g.p.fatalErrCh
+}

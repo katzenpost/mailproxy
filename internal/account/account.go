@@ -29,7 +29,6 @@ import (
 	"github.com/katzenpost/mailproxy/config"
 	"github.com/katzenpost/mailproxy/internal/authority"
 	"github.com/katzenpost/minclient"
-	"github.com/katzenpost/minclient/block"
 	"github.com/op/go-logging"
 )
 
@@ -54,6 +53,7 @@ type Account struct {
 	id       string
 	refCount int32
 
+	onRecvCh    chan interface{}
 	opCh        chan workerOp
 	onlineAt    time.Time
 	emptyAt     time.Time
@@ -173,22 +173,7 @@ func (a *Account) onEmpty() error {
 }
 
 func (a *Account) onMessage(msg []byte) error {
-	// XXX: Should errors here bring the server down instead of just tearing
-	// down the connection?  They should essentially NEVER happen, unless the
-	// database has totally shit itself.
-
-	// Decrypt the block.
-	blk, sender, err := block.DecryptBlock(msg, a.identityKey)
-	if err != nil {
-		a.log.Warningf("Failed to decrypt message into a Block: %v", err)
-
-		// Save undecryptable ciphertexts.
-		return a.onBlockDecryptFailure(msg)
-	}
-
-	// Store the block.  The DB code handles reassembly and shunting messages
-	// to the POP3 account's spool.
-	return a.onBlock(sender, blk)
+	return a.enqueueBlockCiphertext(msg)
 }
 
 func (a *Account) nowUnix() uint64 {
@@ -200,6 +185,7 @@ func (s *Store) newAccount(id string, cfg *config.Account) (*Account, error) {
 	a.s = s
 	a.log = s.logBackend.GetLogger("account:" + id)
 	a.basePath = filepath.Join(s.cfg.Proxy.DataDir, id)
+	a.onRecvCh = make(chan interface{}, 1)
 	a.opCh = make(chan workerOp)
 	a.id = id
 	a.refCount = 1 // Store holds a reference.
@@ -258,8 +244,9 @@ func (s *Store) newAccount(id string, cfg *config.Account) (*Account, error) {
 		return nil, err
 	}
 
-	// Start the worker.
+	// Start the workers.
 	a.Go(a.worker)
+	a.Go(a.recvWorker)
 
 	isOk = true
 	return a, nil

@@ -41,6 +41,7 @@ type Store struct {
 	cfg         *config.Config
 	logBackend  *log.Backend
 	authorities *authority.Store
+	fatalErrCh  chan<- error
 
 	accounts map[string]*Account
 }
@@ -120,6 +121,7 @@ func NewStore(g glue.ProxyInternals) *Store {
 	s.cfg = g.Config()
 	s.logBackend = g.LogBackend()
 	s.authorities = g.Authorities()
+	s.fatalErrCh = g.FatalErrCh()
 	s.accounts = make(map[string]*Account)
 
 	return s
