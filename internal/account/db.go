@@ -37,6 +37,7 @@ package account
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 	"path/filepath"
 
 	bolt "github.com/coreos/bbolt"
@@ -181,6 +182,7 @@ func (a *Account) newDBCryptoState(forDecrypt bool) *noise.HandshakeState {
 		Random:      rand.Reader,
 		Pattern:     noise.HandshakeN,
 		Initiator:   !forDecrypt,
+		MaxMsgLen:   math.MaxUint32,
 	}
 	if forDecrypt {
 		cfg.StaticKeypair = noise.DHKey{
