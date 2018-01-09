@@ -30,14 +30,15 @@ package account
 //       - "eta"       - The SURB ETA unix time (uint64).
 //   - "spool" - The outgoing message queue (SMTP spool).
 //     - `seqNR` - A message (BoltDB's per-bucket sequence number).
-//       - "messageID" - The message ID of the message.
-//       - "user"      - The recipient.
-//       - "provider"  - The recipient's provider.
-//       - "lastACK"   - The last ACK unix time (uint64).
-//       - "waitTill"  - The retransmit unix time (Stop-And-Wait, uint64).
-//       - "bounceAt"  - The earliest bounce unix time (uint64).
-//       - "plaintext" - The message plaintext (Optionally encrypted).
-//       - "blocks"    - The blocks belonging to this message.
+//       - "messageID"  - The message ID of the message.
+//       - "user"       - The recipient.
+//       - "provider"   - The recipient's provider.
+//       - "lastACK"    - The last ACK unix time (uint64).
+//       - "waitTill"   - The retransmit unix time (Stop-And-Wait, uint64).
+//       - "bounceAt"   - The earliest bounce unix time (uint64).
+//       - "plaintext"  - The message plaintext (Optionally encrypted).
+//       - "unreliable" - Denotes that no SURBs should be sent ('0x01').
+//       - "blocks"     - The blocks belonging to this message.
 //         - blockID - A queued block. (uint64 Block ID keys).
 //
 // Note: Unless stated otherwise, all integer values are in network byte
@@ -74,13 +75,14 @@ const (
 	etaKey       = "eta"
 
 	// spoolBucket - also a subkey of "receive".
-	userKey      = "user"
-	providerKey  = "provider"
-	lastACKKey   = "lastACK"
-	waitTillKey  = "waitTill"
-	bounceAtKey  = "bounceAt"
-	plaintextKey = "plaintext"
-	blocksBucket = "blocks"
+	userKey       = "user"
+	providerKey   = "provider"
+	lastACKKey    = "lastACK"
+	waitTillKey   = "waitTill"
+	bounceAtKey   = "bounceAt"
+	plaintextKey  = "plaintext"
+	unreliableKey = "unreliable"
+	blocksBucket  = "blocks"
 )
 
 var (
@@ -125,7 +127,7 @@ func (sa *surbACK) fromBucket(bkt *bolt.Bucket) error {
 }
 
 // EnqueueMessage enqueues a message for transmission.
-func (a *Account) EnqueueMessage(recipient *Recipient, msg []byte) error {
+func (a *Account) EnqueueMessage(recipient *Recipient, msg []byte, isUnreliable bool) error {
 	// Generate a distinct message ID for this message.
 	var msgID [block.MessageIDLength]byte
 	if _, err := io.ReadFull(rand.Reader, msgID[:]); err != nil {
@@ -157,6 +159,9 @@ func (a *Account) EnqueueMessage(recipient *Recipient, msg []byte) error {
 		msgBkt.Put([]byte(providerKey), []byte(recipient.Provider))
 		msgBkt.Put([]byte(bounceAtKey), ts)
 		a.dbEncryptAndPut(msgBkt, []byte(plaintextKey), msg)
+		if isUnreliable {
+			msgBkt.Put([]byte(unreliableKey), []byte{0x01})
+		}
 
 		// Insert the blocks.
 		blocksBkt, err := msgBkt.CreateBucketIfNotExists([]byte(blocksBucket))
@@ -203,6 +208,7 @@ func (a *Account) sendNextBlock() error {
 	var block []byte
 	var blockID uint64
 	var surbID [sConstants.SURBIDLength]byte
+	var isUnreliable bool
 	if err := a.db.View(func(tx *bolt.Tx) error {
 		sendBkt := tx.Bucket([]byte(sendBucket))
 		spoolBkt := sendBkt.Bucket([]byte(spoolBucket))
@@ -283,17 +289,22 @@ func (a *Account) sendNextBlock() error {
 			}
 			user = string(msgBkt.Get([]byte(userKey)))
 			copy(msgID[:], msgBkt.Get([]byte(messageIDKey)))
+			if b := msgBkt.Get([]byte(unreliableKey)); len(b) == 1 && b[0] == 0x01 {
+				isUnreliable = true
+			}
 
-			// Now that we selected a block, generate a SURB ID.  This is
-			// done mid-transaction so that it is possible to ensure that
-			// the generate ID is not already in use.
-			surbsBkt := sendBkt.Bucket([]byte(surbsBucket))
-			for {
-				if _, err := io.ReadFull(rand.Reader, surbID[:]); err != nil {
-					return err
-				}
-				if surbBkt := surbsBkt.Bucket(surbID[:]); surbBkt == nil {
-					return nil
+			if !isUnreliable {
+				// Now that we selected a block, generate a SURB ID.  This is
+				// done mid-transaction so that it is possible to ensure that
+				// the generate ID is not already in use.
+				surbsBkt := sendBkt.Bucket([]byte(surbsBucket))
+				for {
+					if _, err := io.ReadFull(rand.Reader, surbID[:]); err != nil {
+						return err
+					}
+					if surbBkt := surbsBkt.Bucket(surbID[:]); surbBkt == nil {
+						return nil
+					}
 				}
 			}
 		}
@@ -308,30 +319,45 @@ func (a *Account) sendNextBlock() error {
 	// Actually dispatch the packet.  The `SendCiphertext` call is where the
 	// deadlock can happen in minclient.
 	msgIDStr := hex.EncodeToString(msgID[:])
-	a.log.Debugf("Message [%v](->%v): Sending block %v.", msgIDStr, user+"@"+provider, blockID)
-	surbKey, deltaT, err := a.client.SendCiphertext(user, provider, &surbID, block)
-	if err != nil {
-		return err
+	var surbKey []byte
+	var eta uint64
+	var err error
+	if !isUnreliable {
+		a.log.Debugf("Message [%v](->%v): Sending block %v.", msgIDStr, user+"@"+provider, blockID)
+
+		var deltaT time.Duration
+		surbKey, deltaT, err = a.client.SendCiphertext(user, provider, &surbID, block)
+		if err != nil {
+			return err
+		}
+		eta = a.nowUnix() + uint64(deltaT.Seconds())
+	} else {
+		a.log.Debugf("Message [%v](->%v, Unreliable): Sending block %v.", msgIDStr, user+"@"+provider, blockID)
+		if err = a.client.SendUnreliableCiphertext(user, provider, block); err != nil {
+			return nil
+		}
+		eta = a.nowUnix() + uint64(a.s.cfg.Debug.RetransmitSlack) // TODO: Better delay.
 	}
-	eta := a.nowUnix() + uint64(deltaT.Seconds())
 
 	if err = a.db.Update(func(tx *bolt.Tx) error {
 		sendBkt := tx.Bucket([]byte(sendBucket))
 
-		// Save the SURB-ACK metadata.
-		surbsBkt := sendBkt.Bucket([]byte(surbsBucket))
-		surbBkt, err := surbsBkt.CreateBucket(surbID[:])
-		if err != nil {
-			// This should be impossible, because the SURB ID was unique
-			// right after it was generated, and this function won't be
-			// simultaniously called ever.
-			a.log.Errorf("BUG: Failed to create SURB bucket [%v]: %v", hex.EncodeToString(surbID[:]), err)
-			return err
+		if !isUnreliable {
+			// Save the SURB-ACK metadata.
+			surbsBkt := sendBkt.Bucket([]byte(surbsBucket))
+			surbBkt, err := surbsBkt.CreateBucket(surbID[:])
+			if err != nil {
+				// This should be impossible, because the SURB ID was unique
+				// right after it was generated, and this function won't be
+				// simultaniously called ever.
+				a.log.Errorf("BUG: Failed to create SURB bucket [%v]: %v", hex.EncodeToString(surbID[:]), err)
+				return err
+			}
+			surbBkt.Put([]byte(messageIDKey), msgID[:])
+			surbBkt.Put([]byte(sprpKey), surbKey)
+			surbBkt.Put([]byte(blockIDKey), uint64ToBytes(blockID))
+			surbBkt.Put([]byte(etaKey), uint64ToBytes(eta))
 		}
-		surbBkt.Put([]byte(messageIDKey), msgID[:])
-		surbBkt.Put([]byte(sprpKey), surbKey)
-		surbBkt.Put([]byte(blockIDKey), uint64ToBytes(blockID))
-		surbBkt.Put([]byte(etaKey), uint64ToBytes(eta))
 
 		// Update the message in-flight status.
 		spoolBkt := sendBkt.Bucket([]byte(spoolBucket))
@@ -344,7 +370,20 @@ func (a *Account) sendNextBlock() error {
 		}
 		msgBkt.Put([]byte(waitTillKey), uint64ToBytes(eta))
 
-		a.log.Debugf("Message [%v](->%v): SURB stored [%v](Block: %v ETA: %v)", msgIDStr, user+"@"+provider, hex.EncodeToString(surbID[:]), blockID, eta)
+		if !isUnreliable {
+			a.log.Debugf("Message [%v](->%v): SURB stored [%v](Block: %v ETA: %v)", msgIDStr, user+"@"+provider, hex.EncodeToString(surbID[:]), blockID, eta)
+		} else {
+			// Treat sending a block of an unreliable message as if it
+			// immediately received a synthetic ACK, but do not remove the
+			// waitTill entry, so that it is forced to wait in the queue
+			// like everyone else.
+			ack := &surbACK{
+				blockID: blockID,
+				eta:     eta,
+			}
+			copy(ack.messageID[:], msgID[:])
+			a.onACK("<synthetic>", sendBkt, ack, true)
+		}
 
 		return nil
 	}); err == errEntryGone {
@@ -413,12 +452,12 @@ func (a *Account) onSURB(surbID *[sConstants.SURBIDLength]byte, payload []byte) 
 			return nil
 		}
 
-		a.onACK(idStr, sendBkt, ack)
+		a.onACK(idStr, sendBkt, ack, false)
 		return nil
 	})
 }
 
-func (a *Account) onACK(idStr string, sendBkt *bolt.Bucket, ack *surbACK) {
+func (a *Account) onACK(idStr string, sendBkt *bolt.Bucket, ack *surbACK, isSynthetic bool) {
 	msgIDStr := hex.EncodeToString(ack.messageID[:])
 	a.log.Debugf("OnACK: %v [%v](Block: %v ETA: %v)", idStr, msgIDStr, ack.blockID, ack.eta)
 
@@ -439,7 +478,9 @@ func (a *Account) onACK(idStr string, sendBkt *bolt.Bucket, ack *surbACK) {
 	blockID := uint64ToBytes(ack.blockID)
 	if blocksBkt.Get(blockID) != nil {
 		blocksBkt.Delete(blockID)
-		msgBkt.Delete([]byte(waitTillKey)) // No longer a block in-flight.
+		if !isSynthetic {
+			msgBkt.Delete([]byte(waitTillKey)) // No longer a block in-flight.
+		}
 	} else {
 		a.log.Warningf("Discarding SURB-ACK %v: Block already ACKed.", idStr)
 	}

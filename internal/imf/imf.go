@@ -26,6 +26,7 @@ import (
 	"io"
 	"io/ioutil"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/emersion/go-message"
@@ -33,10 +34,15 @@ import (
 )
 
 const (
-	// SenderIdentityHeader is mail header containing the Base64 representation
-	// of the sender's public key, set by the recipient upon successfully
-	// receiving a message.
+	// SenderIdentityHeader is the mail header containing the Base64
+	// representation of the sender's public key, set by the recipient upon
+	// successfully receiving a message.
 	SenderIdentityHeader = "X-Katzenpost-Sender"
+
+	// UnreliableDeliveryHeader is the mail header signifying that the message
+	// should be transmitted without the SURB-ACK functionality.  The expected
+	// value is "true" (case insensitive).
+	UnreliableDeliveryHeader = "X-Katzenpost-Unreliable"
 
 	// LocalName is the common hostname used by mail proxy instances.
 	LocalName = "katzenpost.localhost"
@@ -114,6 +120,22 @@ func ValidateHeaders(e *message.Entity) error {
 		}
 	}
 	return nil
+}
+
+// IsUnreliable examines the headers of an IMF message to see if the
+// non-standard UnreliableDeliveryHeader is set.
+func IsUnreliable(e *message.Entity) (bool, error) {
+	if v := e.Header.Get(UnreliableDeliveryHeader); v != "" {
+		switch strings.ToLower(v) {
+		case "true":
+			return true, nil
+		case "false":
+			return false, nil
+		default:
+			return false, fmt.Errorf("invalid value for header %v: '%v'", UnreliableDeliveryHeader, v)
+		}
+	}
+	return false, nil
 }
 
 // ToCRLF attempts to canonicalize the buffer to have the IMF CRLF line endings

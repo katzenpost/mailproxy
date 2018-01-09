@@ -227,6 +227,10 @@ func (s *smtpSession) onGotData(env *smtpEnvelope, b []byte, viaESMTP bool) erro
 	}
 	imf.AddMessageID(entity)
 	imf.AddReceived(entity, true, viaESMTP)
+	isUnreliable, err := imf.IsUnreliable(entity)
+	if err != nil {
+		return err
+	}
 
 	// Re-serialize the IMF message now to apply the new headers,
 	// and canonicalize the line endings.
@@ -243,7 +247,7 @@ func (s *smtpSession) onGotData(env *smtpEnvelope, b []byte, viaESMTP bool) erro
 	failedRecipients := make(map[string]error)
 	for _, recipient := range env.recipients {
 		// Add the message to the send queue.
-		if err = env.account.EnqueueMessage(recipient, payload); err != nil {
+		if err = env.account.EnqueueMessage(recipient, payload, isUnreliable); err != nil {
 			s.log.Errorf("Failed to enqueue for '%v': %v", recipient, err)
 			failedRecipients[recipient.ID] = err
 			continue
