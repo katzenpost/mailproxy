@@ -61,6 +61,7 @@ import (
 	"github.com/katzenpost/core/sphinx"
 	sConstants "github.com/katzenpost/core/sphinx/constants"
 	"github.com/katzenpost/core/utils"
+	"github.com/katzenpost/mailproxy/internal/imf"
 	"github.com/katzenpost/minclient/block"
 )
 
@@ -500,7 +501,7 @@ func (a *Account) onACK(idStr string, sendBkt *bolt.Bucket, ack *surbACK, isSynt
 }
 
 func (a *Account) doSendGC() {
-	const gcIntervalSec = 86400 // 1 day. XXX: Reduce when this generates bounces.
+	const gcIntervalSec = 300 // 5 minutes.
 
 	a.Lock()
 	defer a.Unlock()
@@ -515,17 +516,19 @@ func (a *Account) doSendGC() {
 
 	a.log.Debugf("Starting send state GC cycle.")
 
-	examined, deleted := 0, 0
+	surbsExamined, surbsDeleted, msgsBounced := 0, 0, 0
 	if err := a.db.Update(func(tx *bolt.Tx) error {
 		sendBkt := tx.Bucket([]byte(sendBucket))
-		surbsBkt := sendBkt.Bucket([]byte(surbsBucket))
+		recvBkt := tx.Bucket([]byte(recvBucket))
 
+		// Purge the expired SURBs.
+		surbsBkt := sendBkt.Bucket([]byte(surbsBucket))
 		cur := surbsBkt.Cursor()
 		for k, v := cur.First(); k != nil; k, v = cur.Next() {
 			if v != nil {
 				continue
 			}
-			examined++
+			surbsExamined++
 			surbBkt := surbsBkt.Bucket(k)
 
 			purge := true
@@ -535,7 +538,54 @@ func (a *Account) doSendGC() {
 			}
 			if purge {
 				cur.Delete()
-				deleted++
+				surbsDeleted++
+			}
+		}
+
+		// Bounce timed out messages, reap zombie messages with no blocks.
+		spoolBkt := sendBkt.Bucket([]byte(spoolBucket))
+		cur = spoolBkt.Cursor()
+		for k, v := cur.First(); k != nil; k, v = cur.Next() {
+			if v != nil {
+				continue
+			}
+
+			msgBkt := spoolBkt.Bucket(k)
+
+			bounce := true
+			zombie := false
+			if bounceAtBytes := msgBkt.Get([]byte(bounceAtKey)); len(bounceAtBytes) == 8 {
+				bounceAt := binary.BigEndian.Uint64(bounceAtBytes)
+				bounce = bounceAt < now
+				// TODO: Check the last forward progress time, and push back
+				// the bounce time if there is active forward progress being
+				// made.
+			}
+			if !bounce {
+				// Ensure there's no messages stuck in the send queue
+				// with no remaining unACKed blocks.  Should never happen,
+				// checking is cheap.
+				blocksBkt := msgBkt.Bucket([]byte(blocksBucket))
+				bCur := blocksBkt.Cursor()
+				if first, _ := bCur.First(); first == nil {
+					zombie = true
+				}
+			} else {
+				msgsBounced++
+
+				msgIDStr := hex.EncodeToString(msgBkt.Get([]byte(messageIDKey)))
+				addr := string(msgBkt.Get([]byte(userKey))) + "@" + string(msgBkt.Get([]byte(providerKey)))
+				a.log.Errorf("Message [%v](->%v): Delivery timed out", msgIDStr, addr)
+
+				payload := a.dbGetAndDecrypt(msgBkt, []byte(plaintextKey))
+				if report, err := imf.NewBounce(a.id, addr, payload); err == nil {
+					a.storeMessage(recvBkt, report)
+				} else {
+					a.log.Errorf("Failed to generate a report: %v", err)
+				}
+			}
+			if bounce || zombie {
+				cur.Delete()
 			}
 		}
 
@@ -548,8 +598,8 @@ func (a *Account) doSendGC() {
 		return
 	}
 
+	a.log.Debugf("Finished send state GC cycle: %v/%v SURBs pruned, %v messages bounced", surbsDeleted, surbsExamined, msgsBounced)
 	a.lastSendGC = now
-	a.log.Debugf("Finished send state GC cycle: %v/%v SURBs pruned.", deleted, examined)
 }
 
 func sendSpoolEntryByID(spoolBkt *bolt.Bucket, id *[block.MessageIDLength]byte) ([]byte, *bolt.Bucket) {

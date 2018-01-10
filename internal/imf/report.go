@@ -293,3 +293,34 @@ The following addresses encountered failures:
 
 	return newMultipartReport(toAddr, "Delivery failure", hrStr, perRecipients, []*ReportPart{p})
 }
+
+// NewBounce creates a new multipart/report message to be used to indicate a
+// failure to deliver a mail.
+func NewBounce(toAddr, recipAddr string, payload []byte) ([]byte, error) {
+	const humanReadable = `This message was created automatically by the Katzenpost Mail Proxy.
+
+The SMTP to Katzenpost interface failed to deliver a message to it's
+intended recipient.
+
+This is a permanent error, and no action is required on your part.
+A copy of the original message is included as an attachment.
+
+The recipient's address was: %v
+`
+
+	hrStr := fmt.Sprintf(humanReadable, recipAddr)
+
+	perRecipient := make(message.Header)
+	perRecipient.Set("Final-Recipient", "rfc822;"+recipAddr)
+	perRecipient.Set("Status", "5.4.7 (Delivery time expired)")
+	perRecipient.Set("Action", "failed")
+
+	p := &ReportPart{
+		Header: message.Header{
+			"Content-Type": []string{"message/rfc822"},
+		},
+		Body: bytes.NewReader(payload),
+	}
+
+	return newMultipartReport(toAddr, "Delivery failure timeout", hrStr, []message.Header{perRecipient}, []*ReportPart{p})
+}
