@@ -245,5 +245,4 @@ The sender's public key was: %v
 	}
 
 	return newMultipartReport(toAddr, "Internal mail proxy error", hrStr, []message.Header{perRecipient}, []*ReportPart{p})
-	return nil, nil
 }
