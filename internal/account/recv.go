@@ -394,6 +394,17 @@ func (a *Account) storeMessage(recvBkt *bolt.Bucket, payload []byte) {
 	a.dbEncryptAndPut(spoolBkt, uint64ToBytes(seq), payload)
 }
 
+// StoreReport stores a locally generated report directly in the account's
+// receive spool.
+func (a *Account) StoreReport(payload []byte) error {
+	return a.db.Update(func(tx *bolt.Tx) error {
+		recvBkt := tx.Bucket([]byte(recvBucket))
+
+		a.storeMessage(recvBkt, payload)
+		return nil
+	})
+}
+
 func (a *Account) resetSpoolSeq(spoolBkt *bolt.Bucket) {
 	// WARNING: This assumes it is called as part of a write capable
 	// transaction.

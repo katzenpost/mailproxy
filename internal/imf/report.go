@@ -246,3 +246,50 @@ The sender's public key was: %v
 
 	return newMultipartReport(toAddr, "Internal mail proxy error", hrStr, []message.Header{perRecipient}, []*ReportPart{p})
 }
+
+// NewEnqueueFailure creates a new multipart/report message to be used to
+// indicate one or more failures in enqueueing a mail.
+func NewEnqueueFailure(toAddr string, enqueued []string, failed map[string]error, header message.Header) ([]byte, error) {
+	const humanReadable = `This message was created automatically by the Katzenpost Mail Proxy.
+
+The SMTP to Katzenpost interface encountered one or more failures when
+enqueueing a message to be dispatched over the Katzenpost mix network.
+
+The following addresses encountered failures:
+`
+
+	hrStr := humanReadable
+
+	var perRecipients []message.Header
+	for k, v := range failed {
+		recipStr := fmt.Sprintf("<%v> (unrecoverable error, %v)\n", k, v)
+		hrStr += recipStr
+
+		r := make(message.Header)
+		r.Set("Final-Recipient", "rfc822;"+k)
+		r.Set("Status", "5.0.0 (Other undefined status)")
+		r.Set("Action", "failed")
+		perRecipients = append(perRecipients, r)
+	}
+
+	for _, v := range enqueued {
+		r := make(message.Header)
+		r.Set("Final-Recipient", "rfc822;"+v)
+		r.Set("Status", "4.0.0 (Other undefined status)")
+		r.Set("Action", "delayed")
+		perRecipients = append(perRecipients, r)
+	}
+
+	var hdrBuf bytes.Buffer
+	if err := writeHeader(&hdrBuf, header); err != nil {
+		return nil, err
+	}
+	p := &ReportPart{
+		Header: message.Header{
+			"Content-Type": []string{"text/rfc822-headers"},
+		},
+		Body: &hdrBuf,
+	}
+
+	return newMultipartReport(toAddr, "Delivery failure", hrStr, perRecipients, []*ReportPart{p})
+}

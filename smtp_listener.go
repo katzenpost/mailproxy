@@ -168,7 +168,7 @@ evLoop:
 					break
 				}
 				s.log.Debugf("Set account: '%v'", accID)
-				env.SetAccount(acc) // Takes ownership of the acc ref count.
+				env.SetAccount(accID, acc) // Takes ownership of the acc ref count.
 			case smtpd.RCPTTO:
 				rcptID, local, domain, err := s.l.p.recipients.Normalize(ev.Arg)
 				if err != nil {
@@ -244,17 +244,20 @@ func (s *smtpSession) onGotData(env *smtpEnvelope, b []byte, viaESMTP bool) erro
 	// each recipient, but this is a far more simple approach, and unlike
 	// traditional MTAs, mailproxy is only going to be servicing a single
 	// user with a comparatively low volume of mail anyway.
-	failedRecipients := make(map[string]error)
+	failed := make(map[string]error)
+	var enqueued []string
 	for _, recipient := range env.recipients {
 		// Add the message to the send queue.
 		if err = env.account.EnqueueMessage(recipient, payload, isUnreliable); err != nil {
 			s.log.Errorf("Failed to enqueue for '%v': %v", recipient, err)
-			failedRecipients[recipient.ID] = err
+			failed[recipient.ID] = err
 			continue
+		} else {
+			enqueued = append(enqueued, recipient.ID)
 		}
 	}
 
-	switch len(failedRecipients) {
+	switch len(failed) {
 	case 0:
 		return nil
 	case len(env.recipients):
@@ -266,8 +269,13 @@ func (s *smtpSession) onGotData(env *smtpEnvelope, b []byte, viaESMTP bool) erro
 		return errEnqueueAllFailed
 	default:
 	}
-	// XXX: Generate a bounce message.
-	return errors.New("BUG: One or more failures in enqueue, bounce not implemented yet, check logs")
+
+	// Generate a multipart/report indicating which recipients failed.
+	report, err := imf.NewEnqueueFailure(env.accountID, enqueued, failed, entity.Header)
+	if err != nil {
+		return err
+	}
+	return env.account.StoreReport(report)
 }
 
 func (s *smtpSession) Write(p []byte) (n int, err error) {
@@ -305,13 +313,15 @@ func (s *smtpSession) Write(p []byte) (n int, err error) {
 type smtpEnvelope struct {
 	account    *account.Account
 	recipients []*account.Recipient
+	accountID  string
 }
 
-func (e *smtpEnvelope) SetAccount(a *account.Account) {
+func (e *smtpEnvelope) SetAccount(id string, a *account.Account) {
 	if e.account != nil {
 		e.account.Deref()
 	}
 	e.account = a
+	e.accountID = id
 }
 
 func (e *smtpEnvelope) AddRecipient(r *account.Recipient) {
@@ -332,6 +342,6 @@ func (e *smtpEnvelope) DedupRecipients() {
 }
 
 func (e *smtpEnvelope) Reset() {
-	e.SetAccount(nil)
+	e.SetAccount("", nil)
 	e.recipients = nil
 }
