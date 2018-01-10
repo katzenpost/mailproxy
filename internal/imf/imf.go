@@ -160,11 +160,15 @@ func ToCRLF(b []byte) []byte {
 // AddMessageID sets the `Message-ID` header if one is not already present in
 // the Entity's header block.
 func AddMessageID(e *message.Entity) {
+	doAddMessageID(e.Header)
+}
+
+func doAddMessageID(h message.Header) {
 	const (
 		tsFmt           = "20060102150405"
 		messageIDHeader = "Message-ID"
 	)
-	if e.Header.Get(messageIDHeader) != "" {
+	if h.Get(messageIDHeader) != "" {
 		return
 	}
 
@@ -178,7 +182,7 @@ func AddMessageID(e *message.Entity) {
 	randPart := strconv.FormatUint(randUint, 36)
 
 	msgID := "<" + tsPart + "." + randPart + "@" + LocalName + ">"
-	e.Header.Set(messageIDHeader, msgID)
+	h.Set(messageIDHeader, msgID)
 }
 
 // AddReceived prepends a `Received` header entry based on the supplied

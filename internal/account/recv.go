@@ -182,11 +182,13 @@ func (a *Account) onBlockDecryptFailure(recvBkt *bolt.Bucket, msg []byte) {
 	}
 
 	// Blocks that fail to decrypt will be presented to the user in the
-	// form of a DSN with the ciphertext as the attachment.
-	//
-	// XXX: Make it so (RFC 6522).
-
-	return
+	// form of a multipart/report with the ciphertext as the attachment.
+	report, err := imf.NewDecryptionFailure(a.id, msg)
+	if err != nil {
+		a.log.Errorf("Failed to generate a report: %v", err)
+		return
+	}
+	a.storeMessage(recvBkt, report)
 }
 
 func (a *Account) onBlock(recvBkt *bolt.Bucket, sender *ecdh.PublicKey, blk *block.Block) error {
@@ -333,17 +335,29 @@ func (a *Account) storeRecvMessage(recvBkt *bolt.Bucket, id, payload []byte) {
 	// Validate that the message is well formed IMF.
 	msg, err := imf.BytesToEntity(payload)
 	if err != nil {
-		// If the message is malformed, wrap it in a DSN.
+		// If the message is malformed, wrap it in a report.
 		a.log.Warningf("Message %v is not well formed IMF: %v", idStr, err)
-		// XXX: Payload -> DSN.
+
+		report, err := imf.NewMalformedIMF(a.id, sender, payload)
+		if err != nil {
+			a.log.Errorf("Failed to generate a report: %v", err)
+			return
+		}
+		a.storeMessage(recvBkt, report)
 		return
 	}
 
 	// Ensure that none of the verboten headers are set.
 	if err = imf.ValidateHeaders(msg); err != nil {
-		// The message has proscribed headers set, wrap it in a DSN.
+		// The message has proscribed headers set, wrap it in a report.
 		a.log.Warningf("Message %v failed header validation: %v", idStr, err)
-		// XXX: Payload -> DSN.
+
+		report, err := imf.NewForbiddenHeaders(a.id, sender, payload)
+		if err != nil {
+			a.log.Errorf("Failed to generate a report: %v", err)
+			return
+		}
+		a.storeMessage(recvBkt, report)
 		return
 	}
 
@@ -354,9 +368,15 @@ func (a *Account) storeRecvMessage(recvBkt *bolt.Bucket, id, payload []byte) {
 	// Store the modified message in the spool.
 	toStore, err := imf.EntityToBytes(msg)
 	if err != nil {
-		// This should NEVER happen, but if it does, wrap it in a DSN.
+		// This should NEVER happen, but if it does, wrap it in a report.
 		a.log.Warningf("Failed to re-serialize message: %v", idStr, err)
-		// XXX: Payload -> DSN.
+
+		report, err := imf.NewReserializationFailure(a.id, sender, payload)
+		if err != nil {
+			a.log.Errorf("Failed to generate a report: %v", err)
+			return
+		}
+		a.storeMessage(recvBkt, report)
 		return
 	}
 
