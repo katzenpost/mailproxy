@@ -229,7 +229,7 @@ func (s *Store) newAccount(id string, cfg *config.Account) (*Account, error) {
 		OnEmptyFn:       a.onEmpty,
 		OnMessageFn:     a.onMessage,
 		OnACKFn:         a.onSURB, // Defined in send.go.
-		DisableTimeSync: true,
+		EnableTimeSync:  false,    // Be explicit about it.
 	}
 
 	var err error
