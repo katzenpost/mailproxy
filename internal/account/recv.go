@@ -41,11 +41,6 @@ package account
 // Note: Unless stated otherwise, all integer values are in network byte
 // order.
 //
-// TODO:
-//
-//  * The sender probably shouldn't be displayed in logs unless debugging
-//    is enabled.
-//
 
 import (
 	"crypto/sha512"
@@ -256,7 +251,7 @@ func (a *Account) onBlock(recvBkt *bolt.Bucket, sender *ecdh.PublicKey, blk *blo
 		return nil
 	}
 	if blk.Payload == nil {
-		blk.Payload = []byte{} // XXX: I hope BoltDB handles this.
+		blk.Payload = []byte{}
 	}
 	a.dbEncryptAndPut(msgBkt, blockID, blk.Payload)
 
@@ -506,8 +501,6 @@ func (a *Account) reassembleFragments(bkt *bolt.Bucket, totalBlocks uint64) ([]b
 	for i := uint64(0); i < totalBlocks; i++ {
 		p := bkt.Get(uint64ToBytes(i))
 		if p == nil {
-			// XXX: Double check that the "right" thing happens if the block
-			// has a 0 length payload.
 			return nil, fmt.Errorf("reassembly failure: block %v/%v missing", i, totalBlocks)
 		}
 		fragments = append(fragments, p)
