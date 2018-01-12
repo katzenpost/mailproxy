@@ -197,6 +197,11 @@ func (a *Account) sendNextBlock() error {
 	//
 	// Note: There is slightly more complexity than this, read the code.
 
+	const (
+		receiveDrainWait  = 1 * time.Minute
+		minimumOnlineTime = 1 * time.Minute
+	)
+
 	doc := a.client.CurrentDocument()
 	if doc == nil {
 		return errNoDocument
@@ -241,17 +246,14 @@ func (a *Account) sendNextBlock() error {
 				// If the server told us that the receive queue was
 				// empty relatively recently, then we probably should
 				// retransmit.
-				if time.Since(a.emptyAt) > 1*time.Minute {
+				if time.Since(a.emptyAt) > receiveDrainWait {
 					// Otherwise, if we have not been online for a
 					// "reasonable" amount of time, delay the retransmit
 					// to hopefully get the receive queue to settle.
-					if time.Since(a.onlineAt) < 1*time.Minute {
+					if time.Since(a.onlineAt) < minimumOnlineTime {
 						continue
 					}
 
-					// TODO: This should also check to see if the receive
-					// process is making forward progress somehow, but
-					// not doing so "only" results in spurrious retransmits.
 				}
 			}
 
@@ -259,6 +261,11 @@ func (a *Account) sendNextBlock() error {
 			// bounced.
 			if b := msgBkt.Get([]byte(bounceAtKey)); len(b) == 8 {
 				bounceAt := binary.BigEndian.Uint64(b[:])
+
+				// TODO: Check to see if the message is still making
+				// forward progress, by examining when it last got an
+				// ACK, and relax the bounce time.
+
 				if bounceAt < now {
 					continue
 				}
@@ -297,7 +304,7 @@ func (a *Account) sendNextBlock() error {
 			if !isUnreliable {
 				// Now that we selected a block, generate a SURB ID.  This is
 				// done mid-transaction so that it is possible to ensure that
-				// the generate ID is not already in use.
+				// the generated ID is not already in use.
 				surbsBkt := sendBkt.Bucket([]byte(surbsBucket))
 				for {
 					if _, err := io.ReadFull(rand.Reader, surbID[:]); err != nil {
