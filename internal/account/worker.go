@@ -64,6 +64,7 @@ func (a *Account) worker() {
 			case *opIsEmpty:
 				a.emptyAt = time.Now()
 				a.doDedupGC()
+				a.doFragsSweep()
 				a.doSendGC()
 				continue
 			case *opConnStatusChanged:

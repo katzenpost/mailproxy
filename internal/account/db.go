@@ -120,6 +120,10 @@ func (a *Account) initDatabase() error {
 			if len(b) == 8 {
 				a.lastDedupGC = binary.BigEndian.Uint64(b)
 			}
+			b = recvBkt.Get([]byte(lastFragsSweepKey))
+			if len(b) == 8 {
+				a.lastFragsSweep = binary.BigEndian.Uint64(b)
+			}
 			b = sendBkt.Get([]byte(lastSendGCKey))
 			if len(b) == 8 {
 				a.lastSendGC = binary.BigEndian.Uint64(b)

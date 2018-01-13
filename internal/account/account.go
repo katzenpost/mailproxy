@@ -53,12 +53,13 @@ type Account struct {
 	id       string
 	refCount int32
 
-	onRecvCh    chan interface{}
-	opCh        chan workerOp
-	onlineAt    time.Time
-	emptyAt     time.Time
-	lastDedupGC uint64
-	lastSendGC  uint64
+	onRecvCh       chan interface{}
+	opCh           chan workerOp
+	onlineAt       time.Time
+	emptyAt        time.Time
+	lastDedupGC    uint64
+	lastFragsSweep uint64
+	lastSendGC     uint64
 }
 
 // Deref decrements the reference count of the Account.  If the reference count

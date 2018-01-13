@@ -37,9 +37,7 @@ var (
 	}
 )
 
-// ReportPart is the third part(s) of a multipart/report containing the
-// message body.
-type ReportPart struct {
+type reportPart struct {
 	Header message.Header
 	Body   io.Reader
 }
@@ -71,7 +69,7 @@ func newMultipartReportHeader(toAddr, subject string) message.Header {
 	return h
 }
 
-func newMultipartReport(toAddr, subject, humanReadable string, perRecipient []message.Header, returned []*ReportPart) ([]byte, error) {
+func newMultipartReport(toAddr, subject, humanReadable string, perRecipient []message.Header, returned *reportPart) ([]byte, error) {
 	var b bytes.Buffer
 
 	// Create the top level writer.
@@ -107,12 +105,12 @@ func newMultipartReport(toAddr, subject, humanReadable string, perRecipient []me
 
 	// (OPTIONAL) A body part containing the returned message or a
 	// portion thereof.
-	for _, v := range returned {
-		pw, err = mw.CreatePart(v.Header)
+	if returned != nil {
+		pw, err = mw.CreatePart(returned.Header)
 		if err != nil {
 			return nil, err
 		}
-		io.Copy(pw, v.Body)
+		io.Copy(pw, returned.Body)
 		pw.Close()
 	}
 
@@ -137,7 +135,7 @@ A copy of the undecipherable ciphertext is included as an attachment.
 	perRecipient.Set("Status", "5.7.5 (Cryptographic failure)")
 	perRecipient.Set("Action", "delivered")
 
-	p := &ReportPart{
+	p := &reportPart{
 		Header: message.Header{
 			"Content-Type":              []string{"application/octet-string"},
 			"Content-Transfer-Encoding": []string{"base64"},
@@ -146,7 +144,7 @@ A copy of the undecipherable ciphertext is included as an attachment.
 		Body: bytes.NewReader(ciphertext),
 	}
 
-	return newMultipartReport(toAddr, "Message decryption failure", humanReadable, []message.Header{perRecipient}, []*ReportPart{p})
+	return newMultipartReport(toAddr, "Message decryption failure", humanReadable, []message.Header{perRecipient}, p)
 }
 
 // NewMalformedIMF creates a new multipart/report message to be used to
@@ -169,7 +167,7 @@ The sender's public key was: %v
 	perRecipient.Set("Status", "5.6.1 (Media not supported)")
 	perRecipient.Set("Action", "delivered")
 
-	p := &ReportPart{
+	p := &reportPart{
 		Header: message.Header{
 			"Content-Type":              []string{"application/octet-string"},
 			"Content-Transfer-Encoding": []string{"base64"},
@@ -178,7 +176,7 @@ The sender's public key was: %v
 		Body: bytes.NewReader(payload),
 	}
 
-	return newMultipartReport(toAddr, "Malformed message, Not IMF", hrStr, []message.Header{perRecipient}, []*ReportPart{p})
+	return newMultipartReport(toAddr, "Malformed message, Not IMF", hrStr, []message.Header{perRecipient}, p)
 }
 
 // NewForbiddenHeaders creates a new multipart/report message to be used to
@@ -202,7 +200,7 @@ The sender's public key was: %v
 	perRecipient.Set("Status", "5.7.7 (Message integrity failure)")
 	perRecipient.Set("Action", "delivered")
 
-	p := &ReportPart{
+	p := &reportPart{
 		Header: message.Header{
 			"Content-Type":              []string{"application/octet-string"},
 			"Content-Transfer-Encoding": []string{"base64"},
@@ -211,7 +209,7 @@ The sender's public key was: %v
 		Body: bytes.NewReader(payload),
 	}
 
-	return newMultipartReport(toAddr, "Malformed message, spoofed sender", hrStr, []message.Header{perRecipient}, []*ReportPart{p})
+	return newMultipartReport(toAddr, "Malformed message, spoofed sender", hrStr, []message.Header{perRecipient}, p)
 }
 
 // NewReserializationFailure creates a new multipart/report message to be used
@@ -235,7 +233,7 @@ The sender's public key was: %v
 	perRecipient.Set("Status", "5.6.0 (Other or undefined media error)")
 	perRecipient.Set("Action", "delivered")
 
-	p := &ReportPart{
+	p := &reportPart{
 		Header: message.Header{
 			"Content-Type":              []string{"application/octet-string"},
 			"Content-Transfer-Encoding": []string{"base64"},
@@ -244,7 +242,7 @@ The sender's public key was: %v
 		Body: bytes.NewReader(payload),
 	}
 
-	return newMultipartReport(toAddr, "Internal mail proxy error", hrStr, []message.Header{perRecipient}, []*ReportPart{p})
+	return newMultipartReport(toAddr, "Internal mail proxy error", hrStr, []message.Header{perRecipient}, p)
 }
 
 // NewEnqueueFailure creates a new multipart/report message to be used to
@@ -284,14 +282,14 @@ The following addresses encountered failures:
 	if err := writeHeader(&hdrBuf, header); err != nil {
 		return nil, err
 	}
-	p := &ReportPart{
+	p := &reportPart{
 		Header: message.Header{
 			"Content-Type": []string{"text/rfc822-headers"},
 		},
 		Body: &hdrBuf,
 	}
 
-	return newMultipartReport(toAddr, "Delivery failure", hrStr, perRecipients, []*ReportPart{p})
+	return newMultipartReport(toAddr, "Delivery failure", hrStr, perRecipients, p)
 }
 
 // NewBounce creates a new multipart/report message to be used to indicate a
@@ -315,12 +313,54 @@ The recipient's address was: %v
 	perRecipient.Set("Status", "5.4.7 (Delivery time expired)")
 	perRecipient.Set("Action", "failed")
 
-	p := &ReportPart{
+	p := &reportPart{
 		Header: message.Header{
 			"Content-Type": []string{"message/rfc822"},
 		},
 		Body: bytes.NewReader(payload),
 	}
 
-	return newMultipartReport(toAddr, "Delivery failure timeout", hrStr, []message.Header{perRecipient}, []*ReportPart{p})
+	return newMultipartReport(toAddr, "Delivery failure, timeout", hrStr, []message.Header{perRecipient}, p)
+}
+
+// NewReceiveTimeout creates a new multipart/report message to be used to
+// indicate a failure to receive a mail.
+func NewReceiveTimeout(toAddr string, sender *ecdh.PublicKey, blocks map[uint64][]byte, totalBlocks uint64) ([]byte, error) {
+	const humanReadable = `This message was created automatically by the Katzenpost Mail Proxy.
+
+A message sent by a remote peer has timed out mid-delivery.
+
+This is a permanent error, and no action is required on your part.
+The partially received message is included as an attachment.
+
+The sender's public key was: %v
+`
+
+	hrStr := fmt.Sprintf(humanReadable, base64.StdEncoding.EncodeToString(sender.Bytes()))
+
+	perRecipient := make(message.Header)
+	perRecipient.Set("Final-Recipient", "rfc822;"+toAddr)
+	perRecipient.Set("Status", "5.4.7 (Delivery time expired)")
+	perRecipient.Set("Action", "delivered")
+
+	var returnedBody []byte
+	for i := uint64(0); i < totalBlocks; i++ {
+		blk, ok := blocks[i]
+		if !ok {
+			blk = []byte(fmt.Sprintf("\n\n[MISSING BLOCK: %v/%v]\n\n", i+1, totalBlocks))
+		}
+
+		returnedBody = append(returnedBody, blk...)
+	}
+
+	p := &reportPart{
+		Header: message.Header{
+			"Content-Type":              []string{"application/octet-string"},
+			"Content-Transfer-Encoding": []string{"base64"},
+			"Content-Disposition":       []string{"attachment; filename=message_partial.bin"},
+		},
+		Body: bytes.NewReader(returnedBody),
+	}
+
+	return newMultipartReport(toAddr, "Receive failure, timeout", hrStr, []message.Header{perRecipient}, p)
 }

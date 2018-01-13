@@ -510,9 +510,6 @@ func (a *Account) onACK(idStr string, sendBkt *bolt.Bucket, ack *surbACK, isSynt
 func (a *Account) doSendGC() {
 	const gcIntervalSec = 300 // 5 minutes.
 
-	a.Lock()
-	defer a.Unlock()
-
 	retransmitSlack := uint64(a.s.cfg.Debug.RetransmitSlack)
 	now := a.nowUnix()
 	deltaT := now - a.lastSendGC

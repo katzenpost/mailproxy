@@ -21,20 +21,21 @@ package account
 // of the following buckets/keys.
 //
 // - "receive" - Receive related buckets.
-//   - "lastDedupGC"   - Last unix time the dedup cache was GCed.
-//   - "pendingBlocks" - Block ciphertexts pending decryption/processing.
+//   - "lastDedupGC"    - Last unix time the dedup cache was GCed.
+//   - "lastFragsSweep" - Last unix time the fragment bucket was swept.
+//   - "pendingBlocks"  - Block ciphertexts pending decryption/processing.
 //                         (BoltDB's per-bucket sequence number.)
-//   - "fragments"     - Messages in the process of being reassembled.
+//   - "fragments"      - Messages in the process of being reassembled.
 //     - senderPK | messageID - A message entry.
 //       - "totalBlocks"    - Total blocks in the message (uint64).
 //       - "receivedBlocks" - Number of blocks received so far (uint64).
 //       - "lastRecv"       - The last forward-progress unix time (uint64).
 //       - blockID          - A received block. (uint64 Block ID keys.
 //                              Optionally encrypted).
-//   - "spool"         - Messages ready for the user (POP3 spool).
+//   - "spool"          - Messages ready for the user (POP3 spool).
 //     - `seqNR` - A message (BoltDB's per-bucket sequence number.
 //                   Optionally encrypted).
-//   - "dedup"         - Message de-duplication.
+//   - "dedup"          - Message de-duplication.
 //     - senderPK | messageID   - The receive unix time (uint64).
 //     - SHA512/256(ciphertext) - Ditto, for failed decryptions.
 //
@@ -59,13 +60,15 @@ import (
 )
 
 const (
-	recvBucket       = "receive"
-	lastDedupGCKey   = "lastDedupGC"
-	pendingBlocksKey = "pendingBlocks"
-	fragsBucket      = "fragments"
-	lastRecvKey      = "lastRecv"
-	spoolBucket      = "spool"
-	dedupBucket      = "dedup"
+	recvBucket        = "receive"
+	lastDedupGCKey    = "lastDedupGC"
+	lastFragsSweepKey = "lastFragsSweep"
+	pendingBlocksKey  = "pendingBlocks"
+	fragsBucket       = "fragments"
+	totalBlocksKey    = "totalBlocks"
+	lastRecvKey       = "lastRecv"
+	spoolBucket       = "spool"
+	dedupBucket       = "dedup"
 )
 
 func (a *Account) recvWorker() {
@@ -187,10 +190,7 @@ func (a *Account) onBlockDecryptFailure(recvBkt *bolt.Bucket, msg []byte) {
 }
 
 func (a *Account) onBlock(recvBkt *bolt.Bucket, sender *ecdh.PublicKey, blk *block.Block) error {
-	const (
-		totalBlocksKey    = "totalBlocks"
-		receivedBlocksKey = "receivedBlocks"
-	)
+	const receivedBlocksKey = "receivedBlocks"
 
 	a.log.Debugf("onBlock: %v.", blkToStr(sender, blk))
 
@@ -410,6 +410,137 @@ func (a *Account) resetSpoolSeq(spoolBkt *bolt.Bucket) {
 	}
 }
 
+func (a *Account) doDedupGC() {
+	const (
+		gcIntervalSec = 86400     // 1 day.
+		entryTTL      = 5 * 86400 // 5 days.
+	)
+
+	now := a.nowUnix()
+	deltaT := now - a.lastDedupGC
+	if deltaT < gcIntervalSec && now > a.lastDedupGC {
+		// Don't do the GC pass all that frequently.
+		return
+	}
+
+	a.log.Debugf("Starting de-duplication cache GC cycle.")
+
+	examined, deleted := 0, 0
+	if err := a.db.Update(func(tx *bolt.Tx) error {
+		recvBkt := tx.Bucket([]byte(recvBucket))
+		dedupBkt := recvBkt.Bucket([]byte(dedupBucket))
+
+		cur := dedupBkt.Cursor()
+		for k, v := cur.First(); k != nil; k, v = cur.Next() {
+			examined++
+			t := binary.BigEndian.Uint64(v)
+			if now > t && now-t > entryTTL {
+				cur.Delete()
+				deleted++
+			}
+		}
+
+		// Update the time stamp of the last GC cycle.
+		recvBkt.Put([]byte(lastDedupGCKey), uint64ToBytes(now))
+		return nil
+	}); err != nil {
+		a.log.Warningf("Failed to GC de-duplication cache: %v", err)
+		return
+	}
+
+	a.lastDedupGC = now
+	a.log.Debugf("Finished de-duplication cache GC cycle: %v/%v pruned.", deleted, examined)
+}
+
+func (a *Account) doFragsSweep() {
+	const timeoutSweepInterval = 15 * 60 // 15 mins.
+
+	// Default case, no receive timeout.
+	if a.s.cfg.Debug.ReceiveTimeout <= 0 {
+		return
+	}
+
+	now := a.nowUnix()
+	deltaT := now - a.lastFragsSweep
+	if deltaT < timeoutSweepInterval && now > a.lastFragsSweep {
+		return
+	}
+
+	a.log.Debugf("Starting receive timeout sweep.")
+
+	examined, timedOut := 0, 0
+	if err := a.db.Update(func(tx *bolt.Tx) error {
+		recvBkt := tx.Bucket([]byte(recvBucket))
+		fragsBkt := recvBkt.Bucket([]byte(fragsBucket))
+
+		cur := fragsBkt.Cursor()
+		for k, v := cur.First(); k != nil; k, v = cur.Next() {
+			if v != nil {
+				continue
+			}
+			examined++
+
+			msgBkt := fragsBkt.Bucket(k)
+			lastRecv := binary.BigEndian.Uint64(msgBkt.Get([]byte(lastRecvKey)))
+			if !(now > lastRecv && now-lastRecv > uint64(a.s.cfg.Debug.ReceiveTimeout)) {
+				continue
+			}
+
+			// Entry timed out.  Generate a report, force enter the
+			// message into the de-duplication cache, and expunge the
+			// message.
+
+			// Pull out all of the components needed for the report.
+			sender := new(ecdh.PublicKey)
+			sender.FromBytes(k[:ecdh.PublicKeySize])
+			totalBlocks := binary.BigEndian.Uint64(msgBkt.Get([]byte(totalBlocksKey)))
+			blocks := make(map[uint64][]byte)
+			for i := uint64(0); i < totalBlocks; i++ {
+				b := msgBkt.Get(uint64ToBytes(i))
+				if b != nil {
+					blocks[i] = dbDecrypt(b)
+				}
+			}
+
+			report, err := imf.NewReceiveTimeout(a.id, sender, blocks, totalBlocks)
+			if err != nil {
+				a.log.Errorf("Failed to generate a report: %v", err)
+			} else {
+				a.storeMessage(recvBkt, report)
+			}
+
+			a.testDuplicate(recvBkt, k, true)
+			cur.Delete()
+			timedOut++
+		}
+
+		recvBkt.Put([]byte(lastFragsSweepKey), uint64ToBytes(now))
+		return nil
+	}); err != nil {
+		a.log.Warningf("Failed to sweep partial messages: %v", err)
+	}
+
+	a.lastFragsSweep = now
+	a.log.Debugf("Finished receive timeout sweep: %v/%v timed out.", timedOut, examined)
+}
+
+func (a *Account) reassembleFragments(bkt *bolt.Bucket, totalBlocks uint64) ([]byte, error) {
+	fragments := make([][]byte, 0, totalBlocks)
+	for i := uint64(0); i < totalBlocks; i++ {
+		p := bkt.Get(uint64ToBytes(i))
+		if p == nil {
+			return nil, fmt.Errorf("reassembly failure: block %v/%v missing", i, totalBlocks)
+		}
+		fragments = append(fragments, p)
+	}
+
+	b := make([]byte, 0, block.BlockPayloadLength*totalBlocks)
+	for _, v := range fragments {
+		b = append(b, a.dbDecrypt(v)...)
+	}
+	return b, nil
+}
+
 func (a *Account) newPOPSession() (pop3.BackendSession, error) {
 	a.Lock()
 	defer a.Unlock()
@@ -448,73 +579,6 @@ func (a *Account) newPOPSession() (pop3.BackendSession, error) {
 	a.log.Noticef("POP3 session created.")
 
 	return s, nil
-}
-
-func (a *Account) doDedupGC() {
-	const (
-		gcIntervalSec = 86400     // 1 day.
-		entryTTL      = 5 * 86400 // 5 days.
-	)
-
-	a.Lock()
-	defer a.Unlock()
-
-	now := a.nowUnix()
-	deltaT := now - a.lastDedupGC
-	if deltaT < gcIntervalSec && now > a.lastDedupGC {
-		// Don't do the GC pass all that frequently.
-		return
-	}
-
-	a.log.Debugf("Starting de-duplication cache GC cycle.")
-
-	examined, deleted := 0, 0
-	if err := a.db.Update(func(tx *bolt.Tx) error {
-		recvBkt := tx.Bucket([]byte(recvBucket))
-		dedupBkt := recvBkt.Bucket([]byte(dedupBucket))
-
-		cur := dedupBkt.Cursor()
-		for k, v := cur.First(); k != nil; k, v = cur.Next() {
-			examined++
-			t := binary.BigEndian.Uint64(v)
-			if now > t && now-t > entryTTL {
-				cur.Delete()
-				deleted++
-			}
-		}
-
-		// Update the time stamp of the last GC cycle.
-		recvBkt.Put([]byte(lastDedupGCKey), uint64ToBytes(now))
-
-		return nil
-	}); err != nil {
-		a.log.Warningf("Failed to GC de-duplication cache: %v", err)
-		return
-	}
-
-	a.lastDedupGC = now
-	a.log.Debugf("Finished de-duplication cache GC cycle: %v/%v pruned.", deleted, examined)
-}
-
-func (a *Account) reassembleFragments(bkt *bolt.Bucket, totalBlocks uint64) ([]byte, error) {
-	fragments := make([][]byte, 0, totalBlocks)
-	for i := uint64(0); i < totalBlocks; i++ {
-		p := bkt.Get(uint64ToBytes(i))
-		if p == nil {
-			return nil, fmt.Errorf("reassembly failure: block %v/%v missing", i, totalBlocks)
-		}
-		fragments = append(fragments, p)
-	}
-
-	b := make([]byte, 0, block.BlockPayloadLength*totalBlocks)
-	for _, v := range fragments {
-		b = append(b, a.dbDecrypt(v)...)
-	}
-	return b, nil
-}
-
-func blkToStr(pk *ecdh.PublicKey, blk *block.Block) string {
-	return fmt.Sprintf("[%v:%v]: %v/%v, %v bytes", pk, hex.EncodeToString(blk.MessageID[:]), blk.BlockID, blk.TotalBlocks, len(blk.Payload))
 }
 
 type popSession struct {
@@ -561,4 +625,8 @@ func (s *popSession) Close() {
 	s.a.popSession = nil
 
 	s.a.log.Noticef("POP3 session closed.")
+}
+
+func blkToStr(pk *ecdh.PublicKey, blk *block.Block) string {
+	return fmt.Sprintf("[%v:%v]: %v/%v, %v bytes", pk, hex.EncodeToString(blk.MessageID[:]), blk.BlockID, blk.TotalBlocks, len(blk.Payload))
 }

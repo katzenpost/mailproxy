@@ -118,6 +118,12 @@ func (lCfg *Logging) validate() error {
 
 // Debug is the mail proxy debug configuration.
 type Debug struct {
+	// ReceiveTimeout is the time in seconds after which the inbound
+	// message processor will give up on a partially received message
+	// measured from when the last non-duplicate fragment was received.
+	// If set to 0 (the default), the timeout is infinite.
+	ReceiveTimeout int
+
 	// BounceQueueLifetime is the minimum time in seconds till the mail
 	// proxy will give up on sending a particular e-mail.
 	BounceQueueLifetime int
@@ -149,6 +155,9 @@ type Debug struct {
 }
 
 func (dCfg *Debug) applyDefaults() {
+	if dCfg.ReceiveTimeout < 0 {
+		dCfg.ReceiveTimeout = 0
+	}
 	if dCfg.BounceQueueLifetime <= 0 {
 		dCfg.BounceQueueLifetime = defaultBounceQueueLifetime
 	}
