@@ -122,11 +122,10 @@ func (a *Account) doCleanup() {
 func (a *Account) initKeys(cfg *config.Account) error {
 	var err error
 
-	if k := cfg.ForcedLinkKey(); k != nil {
+	if cfg.LinkKey != nil {
+		// Copy to avoid side-effects.
 		a.linkKey = new(ecdh.PrivateKey)
-		if err = a.linkKey.FromBytes(k.Bytes()); err != nil {
-			return err
-		}
+		a.linkKey.FromBytes(cfg.LinkKey.Bytes())
 	} else {
 		linkPriv := filepath.Join(a.basePath, "link.private.pem")
 		linkPub := filepath.Join(a.basePath, "link.public.pem")
@@ -136,23 +135,17 @@ func (a *Account) initKeys(cfg *config.Account) error {
 		}
 	}
 
-	if k := cfg.ForcedIdentityKey(); k != nil {
+	if cfg.IdentityKey != nil {
+		// Copy to avoid side-effects.
 		a.identityKey = new(ecdh.PrivateKey)
-		if err = a.identityKey.FromBytes(k.Bytes()); err != nil {
-			return err
-		}
+		a.identityKey.FromBytes(cfg.IdentityKey.Bytes())
 	} else {
 		idPriv := filepath.Join(a.basePath, "identity.private.pem")
 		idPub := filepath.Join(a.basePath, "identity.public.pem")
 		a.identityKey, err = ecdh.Load(idPriv, idPub, rand.Reader)
 	}
 
-	if k := cfg.StorageKey(); k != nil {
-		a.storageKey = new(ecdh.PrivateKey)
-		if err = a.storageKey.FromBytes(k.Bytes()); err != nil {
-			return err
-		}
-	}
+	a.storageKey = cfg.StorageKey
 
 	return err
 }

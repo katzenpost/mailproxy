@@ -215,42 +215,14 @@ type Account struct {
 	// Authority is the authority configuration used by this Account.
 	Authority string
 
-	forcedLinkKey     *ecdh.PrivateKey
-	forcedIdentityKey *ecdh.PrivateKey
-	storageKey        *ecdh.PrivateKey
-}
+	// LinkKey is the Provider authentication key used by this Account.
+	LinkKey *ecdh.PrivateKey `toml:"-"`
 
-// ForcedLinkKey returns the Account's overridden link key if any.
-func (accCfg *Account) ForcedLinkKey() *ecdh.PrivateKey {
-	return accCfg.forcedLinkKey
-}
+	// IdentityKey is the identity key used by this Account.
+	IdentityKey *ecdh.PrivateKey `toml:"-"`
 
-// SetForcedLinkKey sets the Account's link key to an existing private key.
-func (accCfg *Account) SetForcedLinkKey(k *ecdh.PrivateKey) {
-	accCfg.forcedLinkKey = k
-}
-
-// ForcedIdentityKey returns the Account's overridden identity key if any.
-func (accCfg *Account) ForcedIdentityKey() *ecdh.PrivateKey {
-	return accCfg.forcedIdentityKey
-}
-
-// SetForcedIdentityKey sets the Account's identity key to an existing private
-// key.
-func (accCfg *Account) SetForcedIdentityKey(k *ecdh.PrivateKey) {
-	accCfg.forcedIdentityKey = k
-}
-
-// StorageKey returns the optional per-Account database's encryption key if
-// any.
-func (accCfg *Account) StorageKey() *ecdh.PrivateKey {
-	return accCfg.storageKey
-}
-
-// SetStorageKey sets the optional per-Account database's encryption key to
-// an existing private key.
-func (accCfg *Account) SetStorageKey(k *ecdh.PrivateKey) {
-	accCfg.storageKey = k
+	// StorageKey is the optional per-account database encryption key.
+	StorageKey *ecdh.PrivateKey `toml:"-"`
 }
 
 func (accCfg *Account) fixup(cfg *Config) error {
