@@ -498,7 +498,7 @@ func (a *Account) doFragsSweep() {
 			for i := uint64(0); i < totalBlocks; i++ {
 				b := msgBkt.Get(uint64ToBytes(i))
 				if b != nil {
-					blocks[i] = dbDecrypt(b)
+					blocks[i] = a.dbDecrypt(b)
 				}
 			}
 
