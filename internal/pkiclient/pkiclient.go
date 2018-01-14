@@ -37,6 +37,11 @@ var (
 	lruMaxSize   = 8
 )
 
+type cacheEntry struct {
+	raw []byte
+	doc *pki.Document
+}
+
 // Client is a caching PKI client.
 type Client struct {
 	sync.Mutex
@@ -71,10 +76,10 @@ func (c *Client) Halt() {
 }
 
 // Get returns the PKI document for the provided epoch.
-func (c *Client) Get(ctx context.Context, epoch uint64) (*pki.Document, error) {
+func (c *Client) Get(ctx context.Context, epoch uint64) (*pki.Document, []byte, error) {
 	// Fast path, cache hit.
 	if d := c.cacheGet(epoch); d != nil {
-		return d, nil
+		return d.doc, d.raw, nil
 	}
 
 	op := &fetchOp{
@@ -86,12 +91,12 @@ func (c *Client) Get(ctx context.Context, epoch uint64) (*pki.Document, error) {
 	v := <-op.doneCh
 	switch r := v.(type) {
 	case error:
-		return nil, r
-	case *pki.Document:
+		return nil, nil, r
+	case *cacheEntry:
 		// Worker will handle the LRU.
-		return r, nil
+		return r.doc, r.raw, nil
 	default:
-		return nil, fmt.Errorf("BUG: pkiclient: worker returned nonsensical result: %+v", r)
+		return nil, nil, fmt.Errorf("BUG: pkiclient: worker returned nonsensical result: %+v", r)
 	}
 }
 
@@ -100,30 +105,35 @@ func (c *Client) Post(ctx context.Context, epoch uint64, signingKey *eddsa.Priva
 	return errNotSupported
 }
 
-func (c *Client) cacheGet(epoch uint64) *pki.Document {
+// Deserialize returns PKI document given the raw bytes.
+func (c *Client) Deserialize(raw []byte) (*pki.Document, error) {
+	return nil, errNotSupported
+}
+
+func (c *Client) cacheGet(epoch uint64) *cacheEntry {
 	c.Lock()
 	defer c.Unlock()
 
 	if e, ok := c.docs[epoch]; ok {
 		c.lru.MoveToFront(e)
-		return e.Value.(*pki.Document)
+		return e.Value.(*cacheEntry)
 	}
 	return nil
 }
 
-func (c *Client) insertLRU(newDoc *pki.Document) {
+func (c *Client) insertLRU(newEntry *cacheEntry) {
 	c.Lock()
 	defer c.Unlock()
 
-	e := c.lru.PushFront(newDoc)
-	c.docs[newDoc.Epoch] = e
+	e := c.lru.PushFront(newEntry)
+	c.docs[newEntry.doc.Epoch] = e
 
 	// Enforce the max size, by purging based off the LRU.
 	for c.lru.Len() > lruMaxSize {
 		e = c.lru.Back()
-		d := e.Value.(*pki.Document)
+		d := e.Value.(*cacheEntry)
 
-		delete(c.docs, d.Epoch)
+		delete(c.docs, d.doc.Epoch)
 		c.lru.Remove(e)
 	}
 }
@@ -148,13 +158,14 @@ func (c *Client) worker() {
 		//
 		// TODO: This could allow concurrent fetches at some point, but for
 		// most common client use cases, this shouldn't matter much.
-		d, err := c.impl.Get(op.ctx, op.epoch)
+		d, raw, err := c.impl.Get(op.ctx, op.epoch)
 		if err != nil {
 			op.doneCh <- err
 			continue
 		}
-		c.insertLRU(d)
-		op.doneCh <- d
+		e := &cacheEntry{doc: d, raw: raw}
+		c.insertLRU(e)
+		op.doneCh <- e
 	}
 }
 
