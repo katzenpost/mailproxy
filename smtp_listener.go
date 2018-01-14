@@ -26,8 +26,8 @@ import (
 	"github.com/katzenpost/core/worker"
 	"github.com/katzenpost/mailproxy/internal/account"
 	"github.com/katzenpost/mailproxy/internal/imf"
-	"github.com/op/go-logging"
 	"github.com/siebenmann/smtpd"
+	"gopkg.in/op/go-logging.v1"
 )
 
 var (

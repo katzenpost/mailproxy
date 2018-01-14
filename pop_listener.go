@@ -21,7 +21,7 @@ import (
 
 	"github.com/katzenpost/core/worker"
 	"github.com/katzenpost/mailproxy/internal/pop3"
-	"github.com/op/go-logging"
+	"gopkg.in/op/go-logging.v1"
 )
 
 type popListener struct {

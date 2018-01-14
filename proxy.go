@@ -30,7 +30,7 @@ import (
 	"github.com/katzenpost/mailproxy/internal/account"
 	"github.com/katzenpost/mailproxy/internal/authority"
 	"github.com/katzenpost/mailproxy/internal/recipient"
-	"github.com/op/go-logging"
+	"gopkg.in/op/go-logging.v1"
 )
 
 // ErrGenerateOnly is the error returned when the server initialization

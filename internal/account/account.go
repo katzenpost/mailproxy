@@ -29,7 +29,7 @@ import (
 	"github.com/katzenpost/mailproxy/config"
 	"github.com/katzenpost/mailproxy/internal/authority"
 	"github.com/katzenpost/minclient"
-	"github.com/op/go-logging"
+	"gopkg.in/op/go-logging.v1"
 )
 
 // Account is a Provider account and it's associated client instance.
