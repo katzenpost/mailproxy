@@ -107,7 +107,7 @@ func (c *Client) Post(ctx context.Context, epoch uint64, signingKey *eddsa.Priva
 
 // Deserialize returns PKI document given the raw bytes.
 func (c *Client) Deserialize(raw []byte) (*pki.Document, error) {
-	return nil, errNotSupported
+	return c.impl.Deserialize(raw) // I hope impl.Deserialize is re-entrant.
 }
 
 func (c *Client) cacheGet(epoch uint64) *cacheEntry {
