@@ -83,6 +83,7 @@ func (p *Proxy) SendMessage(senderID, recipientID string, payload []byte) error 
 		p.log.Warningf("Sender identity ('%v') does not specify a valid account: %v", accID, err)
 		return err
 	}
+	defer acc.Deref()
 	rcptID, local, domain, err := p.recipients.Normalize(recipientID)
 	if err != nil {
 		p.log.Warningf("Invalid recipient identity argument '%v': %v", recipientID, err)
