@@ -29,6 +29,7 @@ import (
 	"github.com/katzenpost/mailproxy/config"
 	"github.com/katzenpost/mailproxy/internal/account"
 	"github.com/katzenpost/mailproxy/internal/authority"
+	"github.com/katzenpost/mailproxy/internal/imf"
 	"github.com/katzenpost/mailproxy/internal/recipient"
 	"gopkg.in/op/go-logging.v1"
 )
@@ -99,9 +100,27 @@ func (p *Proxy) SendMessage(senderID, recipientID string, payload []byte) error 
 		p.log.Warningf("Recipient identity ('%v') does not specify a known recipient.", rcptID)
 		return errors.New("Recipient identity unknown.")
 	}
-
-	isUnreliable := false
-	if err = acc.EnqueueMessage(rcpt, payload, isUnreliable); err != nil {
+	// Parse the message payload so that headers can be manipulated,
+	// and ensure that there is a Message-ID header, and prepend the
+	// "Received" header.
+	entity, err := imf.BytesToEntity(payload)
+	if err != nil {
+		return err
+	}
+	imf.AddMessageID(entity)
+	viaESMTP := false
+	imf.AddReceived(entity, true, viaESMTP)
+	isUnreliable, err := imf.IsUnreliable(entity)
+	if err != nil {
+		return err
+	}
+	// Re-serialize the IMF message now to apply the new headers,
+	// and canonicalize the line endings.
+	payloadIMF, err := imf.EntityToBytes(entity)
+	if err != nil {
+		return err
+	}
+	if err = acc.EnqueueMessage(rcpt, payloadIMF, isUnreliable); err != nil {
 		p.log.Errorf("Failed to enqueue for '%v': %v", rcpt, err)
 		return err
 	}
