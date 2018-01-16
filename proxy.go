@@ -72,6 +72,19 @@ func (p *Proxy) initLogging() error {
 	return err
 }
 
+func (p *Proxy) SetReceiveHandler(senderID string, recvHandler func([]byte)) error {
+	accID, _, _, err := p.recipients.Normalize(senderID)
+	if err != nil {
+		return err
+	}
+	acc, err := p.accounts.Get(accID)
+	if err != nil {
+		return err
+	}
+	acc.SetReceiveHandler(recvHandler)
+	return nil
+}
+
 // SendMessage sends a message to a specified destination
 func (p *Proxy) SendMessage(senderID, recipientID string, payload []byte) error {
 	accID, _, _, err := p.recipients.Normalize(senderID)
