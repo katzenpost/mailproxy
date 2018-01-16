@@ -30,16 +30,19 @@ package account
 //       - "eta"       - The SURB ETA unix time (uint64).
 //   - "spool" - The outgoing message queue (SMTP spool).
 //     - `seqNR` - A message (BoltDB's per-bucket sequence number).
-//       - "messageID"  - The message ID of the message.
-//       - "user"       - The recipient.
-//       - "provider"   - The recipient's provider.
-//       - "lastACK"    - The last ACK unix time (uint64).
-//       - "waitTill"   - The retransmit unix time (Stop-And-Wait, uint64).
-//       - "bounceAt"   - The earliest bounce unix time (uint64).
-//       - "plaintext"  - The message plaintext (Optionally encrypted).
-//       - "unreliable" - Denotes that no SURBs should be sent ('0x01').
+//       - "messageID"   - The message ID of the message.
+//       - "user"        - The recipient.
+//       - "provider"    - The recipient's provider.
+//       - "lastACK"     - The last ACK unix time (uint64).
+//       - "bounceAt"    - The earliest bounce unix time (uint64).
+//       - "plaintext"   - The message plaintext (Optionally encrypted).
+//       - "unreliable"  - Denotes that no SURBs should be sent ('0x01').
+//       - "totalBlocks" - The number of blocks in the message (uint64).
+//       - "sentBlocks"  - The number of blocks that have been sent at least once (uint64).
 //       - "blocks"     - The blocks belonging to this message.
 //         - blockID - A queued block. (uint64 Block ID keys).
+//       - "surbETAs"    - The retransmit unix times.
+//         - blockID - A estimated ACK arrival time (uint64).
 //
 // Note: Unless stated otherwise, all integer values are in network byte
 // order.
@@ -58,6 +61,7 @@ import (
 	"github.com/katzenpost/core/constants"
 	"github.com/katzenpost/core/crypto/ecdh"
 	"github.com/katzenpost/core/crypto/rand"
+	"github.com/katzenpost/core/queue"
 	"github.com/katzenpost/core/sphinx"
 	sConstants "github.com/katzenpost/core/sphinx/constants"
 	"github.com/katzenpost/core/utils"
@@ -79,11 +83,13 @@ const (
 	userKey       = "user"
 	providerKey   = "provider"
 	lastACKKey    = "lastACK"
-	waitTillKey   = "waitTill"
 	bounceAtKey   = "bounceAt"
 	plaintextKey  = "plaintext"
 	unreliableKey = "unreliable"
-	blocksBucket  = "blocks"
+	// totalBlocks - also a subkey of a recv entry.
+	sentBlocksKey  = "sentBlocks"
+	blocksBucket   = "blocks"
+	surbETAsBucket = "surbETAs"
 )
 
 var (
@@ -159,6 +165,7 @@ func (a *Account) EnqueueMessage(recipient *Recipient, msg []byte, isUnreliable 
 		msgBkt.Put([]byte(userKey), []byte(recipient.User))
 		msgBkt.Put([]byte(providerKey), []byte(recipient.Provider))
 		msgBkt.Put([]byte(bounceAtKey), ts)
+		msgBkt.Put([]byte(totalBlocksKey), uint64ToBytes(uint64(len(blocks))))
 		a.dbEncryptAndPut(msgBkt, []byte(plaintextKey), msg)
 		if isUnreliable {
 			msgBkt.Put([]byte(unreliableKey), []byte{0x01})
@@ -173,7 +180,8 @@ func (a *Account) EnqueueMessage(recipient *Recipient, msg []byte, isUnreliable 
 			blocksBkt.Put(uint64ToBytes(uint64(i)), v)
 		}
 
-		return nil
+		_, err = msgBkt.CreateBucketIfNotExists([]byte(surbETAsBucket))
+		return err
 	}); err != nil {
 		return err
 	}
@@ -191,11 +199,21 @@ func (a *Account) sendNextBlock() error {
 	// While this isn't great, the worst that can happen is one missed (or
 	// spurious) retransmission, both of which are mostly harmless.
 
-	// Find the best available block to transmit, where best is loosely
-	// defined as the first un-ACKed block from the oldest message, that
-	// does not already have a block in-flight.
+	// Find the best available block to transmit.  This is currently done
+	// by examining each message in sequence (FIFO), and:
 	//
-	// Note: There is slightly more complexity than this, read the code.
+	//  * Picking the first block that has not been sent at least once.
+	//
+	//  * If all blocks have been sent, seeing if the earliest ACK arrival
+	//    is sufficiently in the past, and if so, retransmitting the
+	//    corresponding block.
+	//
+	// If neither check produces a block to transmit, the next message
+	// in the queue is examined.
+	//
+	// TODO: This could have better fairness to interleave all the messages
+	// in the queue, instead of transmitting each message fully in-order,
+	// but that's quite a bit of complexity.
 
 	const (
 		receiveDrainWait  = 1 * time.Minute
@@ -207,7 +225,6 @@ func (a *Account) sendNextBlock() error {
 		return errNoDocument
 	}
 
-	retransmitSlack := uint64(a.s.cfg.Debug.RetransmitSlack)
 	now := a.nowUnix()
 	var user, provider string
 	var msgID [block.MessageIDLength]byte
@@ -215,6 +232,7 @@ func (a *Account) sendNextBlock() error {
 	var blockID uint64
 	var surbID [sConstants.SURBIDLength]byte
 	var isUnreliable bool
+	var sentBlocks uint64
 	if err := a.db.View(func(tx *bolt.Tx) error {
 		sendBkt := tx.Bucket([]byte(sendBucket))
 		spoolBkt := sendBkt.Bucket([]byte(spoolBucket))
@@ -227,14 +245,43 @@ func (a *Account) sendNextBlock() error {
 			}
 			msgBkt := spoolBkt.Bucket(k)
 
-			// Check to see if there is a block in-flight already.
-			if b := msgBkt.Get([]byte(waitTillKey)); len(b) == 8 {
-				// Yes, there is a block in-flight.
-				waitTill := binary.BigEndian.Uint64(b[:])
+			// Retreive the initial send metadata.
+			var totalBlocks uint64
+			if b := msgBkt.Get([]byte(totalBlocksKey)); len(b) == 8 {
+				totalBlocks = binary.BigEndian.Uint64(b[:])
+			}
+			if b := msgBkt.Get([]byte(sentBlocksKey)); len(b) == 8 {
+				sentBlocks = binary.BigEndian.Uint64(b[:])
+			}
+			if sentBlocks < totalBlocks {
+				// There is fresh data available to send, so send fresh
+				// data, under the assumption that losses are relatively
+				// infrequent.
+				blockID = sentBlocks
+			} else {
+				// All blocks were sent at least once, check to see
+				// if a retransmission should happen.
+				var waitTill uint64
+
+				// We only need to make the decision based off the block
+				// that we expect to be ACKed at the earliest time, for
+				// reasons that should be obvious.
+				//
+				// TODO/performance: The PQ could be cached instead of
+				// rebuilding it each send cycle, but having multiple
+				// views of the same data is messy.
+				q := buildETAQueue(msgBkt)
+				if e := q.Peek(); e != nil {
+					waitTill = e.Priority
+					blockID = e.Value.(uint64)
+				} else {
+					// This never happen, again the GC will fix this.
+					continue
+				}
 
 				// Check the ACK travel time to see if it's obviously
 				// still in-flight.
-				if waitTill+retransmitSlack > now {
+				if waitTill+uint64(a.s.cfg.Debug.RetransmitSlack) > now {
 					continue
 				}
 
@@ -253,7 +300,6 @@ func (a *Account) sendNextBlock() error {
 					if time.Since(a.onlineAt) < minimumOnlineTime {
 						continue
 					}
-
 				}
 			}
 
@@ -285,9 +331,7 @@ func (a *Account) sendNextBlock() error {
 				continue
 			}
 			blocksBkt := msgBkt.Bucket([]byte(blocksBucket))
-			bCur := blocksBkt.Cursor()
-			if first, b := bCur.First(); first != nil {
-				blockID = binary.BigEndian.Uint64(first)
+			if b := blocksBkt.Get(uint64ToBytes(blockID)); b != nil {
 				block = make([]byte, 0, len(b))
 				block = append(block, b...)
 			} else {
@@ -344,7 +388,6 @@ func (a *Account) sendNextBlock() error {
 		if err = a.client.SendUnreliableCiphertext(user, provider, block); err != nil {
 			return nil
 		}
-		eta = a.nowUnix() + uint64(a.s.cfg.Debug.RetransmitSlack) // TODO: Better delay.
 	}
 
 	if err = a.db.Update(func(tx *bolt.Tx) error {
@@ -376,15 +419,17 @@ func (a *Account) sendNextBlock() error {
 			// this is not a bug, and "only" a spurious retransmission.
 			return errEntryGone
 		}
-		msgBkt.Put([]byte(waitTillKey), uint64ToBytes(eta))
+		msgBkt.Put([]byte(sentBlocksKey), uint64ToBytes(sentBlocks+1))
+		if !isUnreliable {
+			etaBkt := msgBkt.Bucket([]byte(surbETAsBucket))
+			etaBkt.Put(uint64ToBytes(blockID), uint64ToBytes(eta))
+		}
 
 		if !isUnreliable {
 			a.log.Debugf("Message [%v](->%v): SURB stored [%v](Block: %v ETA: %v)", msgIDStr, user+"@"+provider, hex.EncodeToString(surbID[:]), blockID, eta)
 		} else {
 			// Treat sending a block of an unreliable message as if it
-			// immediately received a synthetic ACK, but do not remove the
-			// waitTill entry, so that it is forced to wait in the queue
-			// like everyone else.
+			// immediately received a synthetic ACK.
 			ack := &surbACK{
 				blockID: blockID,
 				eta:     eta,
@@ -487,7 +532,8 @@ func (a *Account) onACK(idStr string, sendBkt *bolt.Bucket, ack *surbACK, isSynt
 	if blocksBkt.Get(blockID) != nil {
 		blocksBkt.Delete(blockID)
 		if !isSynthetic {
-			msgBkt.Delete([]byte(waitTillKey)) // No longer a block in-flight.
+			etaBkt := msgBkt.Bucket([]byte(surbETAsBucket))
+			etaBkt.Delete(blockID)
 		}
 	} else {
 		a.log.Warningf("Discarding SURB-ACK %v: Block already ACKed.", idStr)
@@ -510,7 +556,6 @@ func (a *Account) onACK(idStr string, sendBkt *bolt.Bucket, ack *surbACK, isSynt
 func (a *Account) doSendGC() {
 	const gcIntervalSec = 300 // 5 minutes.
 
-	retransmitSlack := uint64(a.s.cfg.Debug.RetransmitSlack)
 	now := a.nowUnix()
 	deltaT := now - a.lastSendGC
 	if deltaT < gcIntervalSec && now > a.lastSendGC {
@@ -538,7 +583,7 @@ func (a *Account) doSendGC() {
 			purge := true
 			if etaBytes := surbBkt.Get([]byte(etaKey)); len(etaBytes) == 8 {
 				eta := binary.BigEndian.Uint64(etaBytes)
-				purge = eta+retransmitSlack < now
+				purge = eta+uint64(a.s.cfg.Debug.RetransmitSlack) < now
 			}
 			if purge {
 				cur.Delete()
@@ -620,4 +665,17 @@ func sendSpoolEntryByID(spoolBkt *bolt.Bucket, id *[block.MessageIDLength]byte) 
 		}
 	}
 	return nil, nil
+}
+
+func buildETAQueue(msgBkt *bolt.Bucket) *queue.PriorityQueue {
+	q := queue.New()
+
+	etaBkt := msgBkt.Bucket([]byte(surbETAsBucket))
+	cur := etaBkt.Cursor()
+	for k, v := cur.First(); k != nil; k, v = cur.Next() {
+		blockID := binary.BigEndian.Uint64(k)
+		eta := binary.BigEndian.Uint64(v)
+		q.Enqueue(eta, blockID)
+	}
+	return q
 }
