@@ -71,6 +71,42 @@ func (p *Proxy) initLogging() error {
 	return err
 }
 
+// SendMessage sends a message to a specified destination
+func (p *Proxy) SendMessage(senderID, recipientID string, payload []byte) error {
+	accID, _, _, err := p.recipients.Normalize(senderID)
+	if err != nil {
+		p.log.Warningf("Invalid sender identity '%v': %v", senderID, err)
+		return err
+	}
+	acc, err := p.accounts.Get(accID)
+	if err != nil {
+		p.log.Warningf("Sender identity ('%v') does not specify a valid account: %v", accID, err)
+		return err
+	}
+	rcptID, local, domain, err := p.recipients.Normalize(recipientID)
+	if err != nil {
+		p.log.Warningf("Invalid recipient identity argument '%v': %v", recipientID, err)
+		return err
+	}
+	rcpt := &account.Recipient{
+		ID:        rcptID,
+		User:      local,
+		Provider:  domain,
+		PublicKey: p.recipients.Get(rcptID),
+	}
+	if rcpt.PublicKey == nil {
+		p.log.Warningf("Recipient identity ('%v') does not specify a known recipient.", rcptID)
+		return errors.New("Recipient identity unknown.")
+	}
+
+	isUnreliable := false
+	if err = acc.EnqueueMessage(rcpt, payload, isUnreliable); err != nil {
+		p.log.Errorf("Failed to enqueue for '%v': %v", rcpt, err)
+		return err
+	}
+	return nil
+}
+
 // Shutdown cleanly shuts down a given Proxy instance.
 func (p *Proxy) Shutdown() {
 	p.haltOnce.Do(func() { p.halt() })
@@ -213,16 +249,19 @@ func New(cfg *config.Config) (*Proxy, error) {
 		return nil, ErrGenerateOnly
 	}
 
-	// Bring the POP3 interface online.
-	if p.popListener, err = newPOPListener(p); err != nil {
-		p.log.Errorf("Failed to start POP3 listener: %v", err)
-		return nil, err
-	}
+	// If POP3 and SMTP proxy were specified
+	if p.cfg.Proxy == nil {
+		// Bring the POP3 interface online.
+		if p.popListener, err = newPOPListener(p); err != nil {
+			p.log.Errorf("Failed to start POP3 listener: %v", err)
+			return nil, err
+		}
 
-	// Bring the SMTP interface online.
-	if p.smtpListener, err = newSMTPListener(p); err != nil {
-		p.log.Errorf("Failed to start SMTP listener: %v", err)
-		return nil, err
+		// Bring the SMTP interface online.
+		if p.smtpListener, err = newSMTPListener(p); err != nil {
+			p.log.Errorf("Failed to start SMTP listener: %v", err)
+			return nil, err
+		}
 	}
 
 	// Start listening on the management if enabled, now that all subsystems
