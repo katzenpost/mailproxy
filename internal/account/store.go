@@ -60,7 +60,7 @@ func (s *Store) Set(id string, cfg *config.Account) error {
 		return errExists
 	}
 
-	a, err := s.newAccount(id, cfg)
+	a, err := s.newAccount(id, cfg, s.cfg.UpstreamProxyConfig())
 	if err != nil {
 		return err
 	}

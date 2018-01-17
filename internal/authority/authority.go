@@ -24,6 +24,7 @@ import (
 	"github.com/katzenpost/core/log"
 	"github.com/katzenpost/core/pki"
 	"github.com/katzenpost/mailproxy/internal/pkiclient"
+	"github.com/katzenpost/mailproxy/internal/proxy"
 )
 
 var (
@@ -34,7 +35,7 @@ var (
 
 // Factory constructs a new pki.Client instance with a pre-set configuration.
 type Factory interface {
-	New(*log.Backend) (pki.Client, error)
+	New(*log.Backend, *proxy.Config) (pki.Client, error)
 }
 
 // Authority is a directory authority instance.
@@ -79,6 +80,7 @@ type Store struct {
 	sync.Mutex
 
 	logBackend  *log.Backend
+	proxyConfig *proxy.Config
 	authorities map[string]*Authority
 }
 
@@ -96,7 +98,7 @@ func (s *Store) Set(id string, f Factory) error {
 		return errExists
 	}
 
-	impl, err := f.New(s.logBackend)
+	impl, err := f.New(s.logBackend, s.proxyConfig)
 	if err != nil {
 		return err
 	}
@@ -143,9 +145,10 @@ func (s *Store) Reset() {
 }
 
 // NewStore constructs a new Store instance.
-func NewStore(l *log.Backend) *Store {
+func NewStore(l *log.Backend, pCfg *proxy.Config) *Store {
 	s := new(Store)
 	s.logBackend = l
+	s.proxyConfig = pCfg
 	s.authorities = make(map[string]*Authority)
 	return s
 }

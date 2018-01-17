@@ -188,7 +188,7 @@ func New(cfg *config.Config) (*Proxy, error) {
 	}
 
 	// Bring the authority cache online.
-	p.authorities = authority.NewStore(p.logBackend)
+	p.authorities = authority.NewStore(p.logBackend, p.cfg.UpstreamProxyConfig())
 	for k, v := range p.cfg.AuthorityMap() {
 		if err = p.authorities.Set(k, v); err != nil {
 			p.log.Errorf("Failed to add authority '%v' to store: %v", k, err)

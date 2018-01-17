@@ -28,6 +28,7 @@ import (
 	"github.com/katzenpost/core/worker"
 	"github.com/katzenpost/mailproxy/config"
 	"github.com/katzenpost/mailproxy/internal/authority"
+	"github.com/katzenpost/mailproxy/internal/proxy"
 	"github.com/katzenpost/minclient"
 	"gopkg.in/op/go-logging.v1"
 )
@@ -174,7 +175,7 @@ func (a *Account) nowUnix() uint64 {
 	return uint64(time.Now().Unix())
 }
 
-func (s *Store) newAccount(id string, cfg *config.Account) (*Account, error) {
+func (s *Store) newAccount(id string, cfg *config.Account, pCfg *proxy.Config) (*Account, error) {
 	a := new(Account)
 	a.s = s
 	a.log = s.logBackend.GetLogger("account:" + id)
@@ -223,6 +224,7 @@ func (s *Store) newAccount(id string, cfg *config.Account) (*Account, error) {
 		OnEmptyFn:           a.onEmpty,
 		OnMessageFn:         a.onMessage,
 		OnACKFn:             a.onSURB, // Defined in send.go.
+		DialContextFn:       pCfg.ToDialContext(id),
 		MessagePollInterval: time.Duration(a.s.cfg.Debug.PollingInterval) * time.Second,
 		EnableTimeSync:      false, // Be explicit about it.
 	}

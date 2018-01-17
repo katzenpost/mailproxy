@@ -34,6 +34,7 @@ import (
 	"github.com/katzenpost/core/pki"
 	"github.com/katzenpost/core/utils"
 	"github.com/katzenpost/mailproxy/internal/authority"
+	"github.com/katzenpost/mailproxy/internal/proxy"
 	"golang.org/x/net/idna"
 	"golang.org/x/text/secure/precis"
 )
@@ -86,7 +87,7 @@ func (pCfg *Proxy) validate() error {
 		return fmt.Errorf("config: Proxy: SMTPAddress '%v' is invalid: %v", pCfg.SMTPAddress, err)
 	}
 	if !filepath.IsAbs(pCfg.DataDir) {
-		return fmt.Errorf("config: ProxyL DataDir '%v' is not an absolute path", pCfg.DataDir)
+		return fmt.Errorf("config: Proxy: DataDir '%v' is not an absolute path", pCfg.DataDir)
 	}
 	return nil
 }
@@ -182,11 +183,12 @@ type NonvotingAuthority struct {
 }
 
 // New constructs a pki.Client with the specified non-voting authority config.
-func (nvACfg *NonvotingAuthority) New(l *log.Backend) (pki.Client, error) {
+func (nvACfg *NonvotingAuthority) New(l *log.Backend, pCfg *proxy.Config) (pki.Client, error) {
 	cfg := &nvClient.Config{
-		LogBackend: l,
-		Address:    nvACfg.Address,
-		PublicKey:  nvACfg.PublicKey,
+		LogBackend:    l,
+		Address:       nvACfg.Address,
+		PublicKey:     nvACfg.PublicKey,
+		DialContextFn: pCfg.ToDialContext("nonvoting:" + nvACfg.PublicKey.String()),
 	}
 	return nvClient.New(cfg)
 }
@@ -287,12 +289,43 @@ func (mCfg *Management) validate() error {
 	return nil
 }
 
+// UpstreamProxy is the mailproxy outgoing connection proxy configuration.
+type UpstreamProxy struct {
+	// Type is the proxy type (Eg: "none"," socks5").
+	Type string
+
+	// Address is the proxy's IP address/port combination.
+	Address string
+
+	// User is the optional proxy username.
+	User string
+
+	// Password is the optional proxy password.
+	Password string
+}
+
+func (uCfg *UpstreamProxy) toProxyConfig() (*proxy.Config, error) {
+	// This is kind of dumb, but this is the cleanest way I can think of
+	// doing this.
+	cfg := &proxy.Config{
+		Type:     uCfg.Type,
+		Address:  uCfg.Address,
+		User:     uCfg.User,
+		Password: uCfg.Password,
+	}
+	if err := cfg.FixupAndValidate(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
 // Config is the top level mail proxy configuration.
 type Config struct {
-	Proxy      *Proxy
-	Logging    *Logging
-	Management *Management
-	Debug      *Debug
+	Proxy         *Proxy
+	Logging       *Logging
+	Management    *Management
+	UpstreamProxy *UpstreamProxy
+	Debug         *Debug
 
 	NonvotingAuthority map[string]*NonvotingAuthority
 	Account            []*Account
@@ -300,6 +333,8 @@ type Config struct {
 
 	authorities map[string]authority.Factory
 	accounts    map[string]*Account
+
+	upstreamProxy *proxy.Config
 }
 
 // AuthorityMap returns the identifier->authority.Factory mapping specified in
@@ -312,6 +347,12 @@ func (cfg *Config) AuthorityMap() map[string]authority.Factory {
 // Config.
 func (cfg *Config) AccountMap() map[string]*Account {
 	return cfg.accounts
+}
+
+// UpstreamProxyConfig returns the configured upstream proxy, suitable for
+// internal use.  Most people should not use this.
+func (cfg *Config) UpstreamProxyConfig() *proxy.Config {
+	return cfg.upstreamProxy
 }
 
 // FixupAndValidate applies defaults to config entries and validates the
@@ -330,6 +371,9 @@ func (cfg *Config) FixupAndValidate() error {
 		cfg.Management = &Management{}
 	}
 	cfg.Management.applyDefaults(cfg.Proxy)
+	if cfg.UpstreamProxy == nil {
+		cfg.UpstreamProxy = &UpstreamProxy{}
+	}
 	if cfg.Debug == nil {
 		cfg.Debug = &Debug{}
 	}
@@ -349,6 +393,11 @@ func (cfg *Config) FixupAndValidate() error {
 	}
 	if err := cfg.Management.validate(); err != nil {
 		return err
+	}
+	if uCfg, err := cfg.UpstreamProxy.toProxyConfig(); err != nil {
+		return err
+	} else {
+		cfg.upstreamProxy = uCfg
 	}
 	for k, v := range cfg.NonvotingAuthority {
 		if err := v.validate(); err != nil {
