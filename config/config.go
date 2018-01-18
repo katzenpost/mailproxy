@@ -294,7 +294,10 @@ type UpstreamProxy struct {
 	// Type is the proxy type (Eg: "none"," socks5").
 	Type string
 
-	// Address is the proxy's IP address/port combination.
+	// Network is the proxy address' network (`unix`, `tcp`).
+	Network string
+
+	// Address is the proxy's address.
 	Address string
 
 	// User is the optional proxy username.
@@ -309,6 +312,7 @@ func (uCfg *UpstreamProxy) toProxyConfig() (*proxy.Config, error) {
 	// doing this.
 	cfg := &proxy.Config{
 		Type:     uCfg.Type,
+		Network:  uCfg.Network,
 		Address:  uCfg.Address,
 		User:     uCfg.User,
 		Password: uCfg.Password,

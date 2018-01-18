@@ -37,6 +37,9 @@ const (
 	typeTorSocks5 = "tor+socks5"
 	typeSocks5    = "socks5"
 
+	netUnix = "unix"
+	netTCP  = "tcp"
+
 	maxSocks5AuthLen = 255
 )
 
@@ -47,7 +50,10 @@ type Config struct {
 	// Type is the proxy type (Eg: "none"," socks5", "tor+socks5").
 	Type string
 
-	// Address is the proxy's IP address/port combination.
+	// Network is the proxy address' network (`unix`, `tcp`).
+	Network string
+
+	// Address is the proxy's address.
 	Address string
 
 	// User is the optional proxy username.
@@ -90,8 +96,23 @@ func (cfg *Config) FixupAndValidate() error {
 				Password: cfg.Password,
 			}
 		}
-		if err := utils.EnsureAddrIPPort(cfg.Address); err != nil {
-			return fmt.Errorf("proxy/config: Address '%v' is invalid: %v", cfg.Address, err)
+
+		cfg.Network = strings.ToLower(cfg.Network)
+		switch cfg.Network {
+		case netTCP:
+			if err := utils.EnsureAddrIPPort(cfg.Address); err != nil {
+				return fmt.Errorf("proxy/config: Address '%v' is invalid: %v", cfg.Address, err)
+			}
+		case netUnix:
+			fi, err := os.Lstat(cfg.Address)
+			if err != nil {
+				return fmt.Errorf("proxy/config: Address '%v' failed to stat(): %v", cfg.Address, err)
+			}
+			if fi.Mode()&os.ModeSocket == 0 {
+				return fmt.Errorf("proxy/config: Address '%v' does not appear to be a socket", cfg.Address)
+			}
+		default:
+			return fmt.Errorf("proxy/config: Network '%v' is invalid", cfg.Network)
 		}
 	default:
 		return fmt.Errorf("proxy/config: Type '%v' is invalid", cfg.Type)
@@ -126,6 +147,7 @@ func (cfg *Config) newContextSOCKS5(tag string) DialContextFn {
 	}
 
 	s := &contextSOCKS5{
+		proxyNet:  cfg.Network,
 		proxyAddr: cfg.Address,
 		proxyAuth: auth,
 	}
@@ -133,6 +155,7 @@ func (cfg *Config) newContextSOCKS5(tag string) DialContextFn {
 }
 
 type contextSOCKS5 struct {
+	proxyNet  string
 	proxyAddr string
 	proxyAuth *proxy.Auth
 }
@@ -146,7 +169,7 @@ func (s *contextSOCKS5) dialContext(ctx context.Context, network, address string
 	}
 	defer close(fwdDialer.connCh)
 
-	socksDialer, err := proxy.SOCKS5("tcp", s.proxyAddr, s.proxyAuth, fwdDialer)
+	socksDialer, err := proxy.SOCKS5(s.proxyNet, s.proxyAddr, s.proxyAuth, fwdDialer)
 	if err != nil {
 		return nil, err
 	}
