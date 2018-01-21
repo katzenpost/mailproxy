@@ -17,10 +17,12 @@
 package account
 
 import (
+	"context"
 	"math"
 	"time"
 
 	"github.com/katzenpost/core/crypto/rand"
+	"github.com/katzenpost/core/epochtime"
 )
 
 type workerOp interface{}
@@ -34,7 +36,7 @@ type opConnStatusChanged struct {
 func (a *Account) worker() {
 	const maxDuration = math.MaxInt64
 
-	tau := a.s.cfg.Debug.TransmitTau
+	lambdaP := 15.0
 	mRng := rand.NewMath()
 	isConnected := false
 	wakeInterval := time.Duration(maxDuration)
@@ -55,6 +57,8 @@ func (a *Account) worker() {
 		if timerFired {
 			// It is time to send another block if one exists.
 			if isConnected { // Suppress spurious wakeups.
+				// TODO: This needs to figure out if no block was sent,
+				// and send cover traffic.
 				if err := a.sendNextBlock(); err != nil {
 					a.log.Warningf("Failed to send queued block: %v", err)
 				}
@@ -84,28 +88,45 @@ func (a *Account) worker() {
 					} else {
 						a.log.Debugf("Clock skew vs provider: %v", skew)
 					}
+
+					// Update the idea of lambdaP from the PKI document.
+					//
+					// Note: This shouldn't actually do a document fetch,
+					// because the document is in the LRU cache, however
+					// the "correct" thing to do would be to hook minclient
+					// to feed the value to us.
+					var newLambdaP float64
+					epoch, _, _ := epochtime.Now()
+					for _, e := range []uint64{epoch, epoch - 1} {
+						if doc, _, err := a.authority.Client().Get(context.Background(), e); err == nil {
+							newLambdaP = doc.LambdaP
+							break
+						}
+					}
+					if newLambdaP != 0.0 {
+						a.log.Debugf("Updated lambdaP: %v", newLambdaP)
+						lambdaP = newLambdaP
+					}
 				}
 			default:
 				a.log.Warningf("BUG: Worker received nonsensical op: %T", op)
 			}
 		}
 		if isConnected {
-			// In a perfect world, this would probably send both cover
-			// traffic and payload at a fixed interval.  However I currently
-			// view this as impractical for a few reasons.
+			// Per section 4.1.2 of the Loopix paper:
 			//
-			//  * It is unclear to me what a good "fixed" interval will be
-			//    such that sufficient useful cover traffic is generated,
-			//    while neither overloading the network nor making mobile
-			//    users cry, while allowing for sufficient goodput.
+			//   Users emit payload messages following a Poisson
+			//   distribution with parameter lambdaP. All messages
+			//   scheduled for sending by the user are placed within
+			//   a first-in first-out buffer. According to a Poisson
+			//   process, a single message is popped out of the buffer
+			//   and sent, or a drop cover message is sent in case the
+			//   buffer is empty. Thus, from an adversarial perspective,
+			//   there is always traffic emitted modeled by Pois(lambdaP).
 			//
-			//  * Fixed intervals leak information via the jitter.
-			//
-			// Until someone comes up with satesfactory answers to both
-			// questions, an alternate strategy will be used that attempts
-			// to mimimize information leakage, while also being capable
-			// of being tuned as required.
-			wakeInterval = time.Duration(tau+mRng.Intn(tau*2)) * time.Millisecond
+			// TODO: The interval should probably be fuzzed a bit to not
+			// be an integral number of seconds (timing sidechannel?).
+			wakeInterval = time.Duration(rand.Poisson(mRng, lambdaP)) * time.Second
 		} else {
 			wakeInterval = maxDuration
 		}

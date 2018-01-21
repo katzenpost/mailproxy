@@ -47,7 +47,6 @@ const (
 	defaultBounceQueueLifetime = 432000 // 5 days.
 	defaultPollingInterval     = 30     // 30 seconds.
 	defaultRetransmitSlack     = 300    // 5 minutes.
-	defaultTransmitTau         = 5000   // 5 seconds. (TODO: Tune this.)
 )
 
 var defaultLogging = Logging{
@@ -143,9 +142,6 @@ type Debug struct {
 	// unneccecary load on the network.
 	RetransmitSlack int
 
-	// TransmitTau is the magic send scheduling tuning parameter.
-	TransmitTau int
-
 	// CaseSensitiveUserIdentifiers disables the forced lower casing of
 	// the Account `User` field.
 	CaseSensitiveUserIdentifiers bool
@@ -167,9 +163,6 @@ func (dCfg *Debug) applyDefaults() {
 	}
 	if dCfg.RetransmitSlack <= 0 {
 		dCfg.RetransmitSlack = defaultRetransmitSlack
-	}
-	if dCfg.TransmitTau <= 0 {
-		dCfg.TransmitTau = defaultTransmitTau
 	}
 }
 
