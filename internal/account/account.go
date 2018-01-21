@@ -24,6 +24,7 @@ import (
 	bolt "github.com/coreos/bbolt"
 	"github.com/katzenpost/core/crypto/ecdh"
 	"github.com/katzenpost/core/crypto/rand"
+	"github.com/katzenpost/core/pki"
 	"github.com/katzenpost/core/utils"
 	"github.com/katzenpost/core/worker"
 	"github.com/katzenpost/mailproxy/config"
@@ -180,6 +181,18 @@ func (a *Account) onMessage(msg []byte) error {
 	return a.enqueueBlockCiphertext(msg)
 }
 
+func (a *Account) onDocument(doc *pki.Document) {
+	a.log.Debugf("onDocument(): Epoch %v", doc.Epoch)
+
+	a.Lock()
+	defer a.Unlock()
+
+	if a.refCount > 0 {
+		// Wake up the worker so it can adjust it's lambdaP.
+		a.opCh <- &opNewDocument{doc}
+	}
+}
+
 func (a *Account) nowUnix() uint64 {
 	return uint64(time.Now().Unix())
 }
@@ -233,6 +246,7 @@ func (s *Store) newAccount(id string, cfg *config.Account, pCfg *proxy.Config) (
 		OnEmptyFn:           a.onEmpty,
 		OnMessageFn:         a.onMessage,
 		OnACKFn:             a.onSURB, // Defined in send.go.
+		OnDocumentFn:        a.onDocument,
 		DialContextFn:       pCfg.ToDialContext(id),
 		MessagePollInterval: time.Duration(a.s.cfg.Debug.PollingInterval) * time.Second,
 		EnableTimeSync:      false, // Be explicit about it.

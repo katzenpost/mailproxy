@@ -17,12 +17,11 @@
 package account
 
 import (
-	"context"
 	"math"
 	"time"
 
 	"github.com/katzenpost/core/crypto/rand"
-	"github.com/katzenpost/core/epochtime"
+	"github.com/katzenpost/core/pki"
 )
 
 type workerOp interface{}
@@ -31,6 +30,10 @@ type opIsEmpty struct{}
 
 type opConnStatusChanged struct {
 	isConnected bool
+}
+
+type opNewDocument struct {
+	doc *pki.Document
 }
 
 func (a *Account) worker() {
@@ -88,25 +91,16 @@ func (a *Account) worker() {
 					} else {
 						a.log.Debugf("Clock skew vs provider: %v", skew)
 					}
-
-					// Update the idea of lambdaP from the PKI document.
-					//
-					// Note: This shouldn't actually do a document fetch,
-					// because the document is in the LRU cache, however
-					// the "correct" thing to do would be to hook minclient
-					// to feed the value to us.
-					var newLambdaP float64
-					epoch, _, _ := epochtime.Now()
-					for _, e := range []uint64{epoch, epoch - 1} {
-						if doc, _, err := a.authority.Client().Get(context.Background(), e); err == nil {
-							newLambdaP = doc.LambdaP
-							break
-						}
+				}
+			case *opNewDocument:
+				// Update the idea of lambdaP from the PKI document.
+				if newLambdaP := op.doc.LambdaP; newLambdaP != lambdaP {
+					if newLambdaP < 1.0 {
+						a.log.Debugf("Ignoring pathologically small lambdaP: %v", newLambdaP)
+						continue
 					}
-					if newLambdaP != 0.0 {
-						a.log.Debugf("Updated lambdaP: %v", newLambdaP)
-						lambdaP = newLambdaP
-					}
+					a.log.Debugf("Updated lambdaP: %v", newLambdaP)
+					lambdaP = newLambdaP
 				}
 			default:
 				a.log.Warningf("BUG: Worker received nonsensical op: %T", op)
