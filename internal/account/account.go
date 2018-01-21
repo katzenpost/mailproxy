@@ -154,16 +154,25 @@ func (a *Account) initKeys(cfg *config.Account) error {
 func (a *Account) onConn(isConnected bool) {
 	a.log.Debugf("onConn(%v)", isConnected)
 
-	// Wake up the worker so it can adjust it's send scheduling.
-	a.opCh <- &opConnStatusChanged{isConnected}
+	a.Lock()
+	defer a.Unlock()
+
+	if a.refCount > 0 {
+		// Wake up the worker so it can adjust it's send scheduling.
+		a.opCh <- &opConnStatusChanged{isConnected}
+	}
 }
 
 func (a *Account) onEmpty() error {
 	a.log.Debugf("onEmpty()")
 
-	// Call into the worker to update the state.
-	a.opCh <- &opIsEmpty{}
+	a.Lock()
+	defer a.Unlock()
 
+	if a.refCount > 0 {
+		// Call into the worker to update the state.
+		a.opCh <- &opIsEmpty{}
+	}
 	return nil
 }
 
