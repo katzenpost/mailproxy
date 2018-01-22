@@ -214,15 +214,19 @@ func New(cfg *config.Config) (*Proxy, error) {
 	}
 
 	// Bring the POP3 interface online.
-	if p.popListener, err = newPOPListener(p); err != nil {
-		p.log.Errorf("Failed to start POP3 listener: %v", err)
-		return nil, err
-	}
+	if !p.cfg.Proxy.NoLaunchListeners {
+		if p.popListener, err = newPOPListener(p); err != nil {
+			p.log.Errorf("Failed to start POP3 listener: %v", err)
+			return nil, err
+		}
 
-	// Bring the SMTP interface online.
-	if p.smtpListener, err = newSMTPListener(p); err != nil {
-		p.log.Errorf("Failed to start SMTP listener: %v", err)
-		return nil, err
+		// Bring the SMTP interface online.
+		if p.smtpListener, err = newSMTPListener(p); err != nil {
+			p.log.Errorf("Failed to start SMTP listener: %v", err)
+			return nil, err
+		}
+	} else {
+		p.log.Debugf("Skipping POP3/SMTP listener initialization.")
 	}
 
 	// Start listening on the management if enabled, now that all subsystems

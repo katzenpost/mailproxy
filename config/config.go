@@ -67,6 +67,11 @@ type Proxy struct {
 
 	// DataDir is the absolute path to the mail proxy's state files.
 	DataDir string
+
+	// NoLaunchListeners disables the POP3 and SMTP interfaces, which is
+	// useful if you are using mailproxy as a library rather than a
+	// stand-alone process.
+	NoLaunchListeners bool
 }
 
 func (pCfg *Proxy) applyDefaults() {
@@ -79,11 +84,13 @@ func (pCfg *Proxy) applyDefaults() {
 }
 
 func (pCfg *Proxy) validate() error {
-	if err := utils.EnsureAddrIPPort(pCfg.POP3Address); err != nil {
-		return fmt.Errorf("config: Proxy: POP3Address '%v' is invalid: %v", pCfg.POP3Address, err)
-	}
-	if err := utils.EnsureAddrIPPort(pCfg.SMTPAddress); err != nil {
-		return fmt.Errorf("config: Proxy: SMTPAddress '%v' is invalid: %v", pCfg.SMTPAddress, err)
+	if !pCfg.NoLaunchListeners {
+		if err := utils.EnsureAddrIPPort(pCfg.POP3Address); err != nil {
+			return fmt.Errorf("config: Proxy: POP3Address '%v' is invalid: %v", pCfg.POP3Address, err)
+		}
+		if err := utils.EnsureAddrIPPort(pCfg.SMTPAddress); err != nil {
+			return fmt.Errorf("config: Proxy: SMTPAddress '%v' is invalid: %v", pCfg.SMTPAddress, err)
+		}
 	}
 	if !filepath.IsAbs(pCfg.DataDir) {
 		return fmt.Errorf("config: Proxy: DataDir '%v' is not an absolute path", pCfg.DataDir)

@@ -170,24 +170,18 @@ evLoop:
 				s.log.Debugf("Set account: '%v'", accID)
 				env.SetAccount(accID, acc) // Takes ownership of the acc ref count.
 			case smtpd.RCPTTO:
-				rcptID, local, domain, err := s.l.p.recipients.Normalize(ev.Arg)
+				rcpt, err := s.l.p.toAccountRecipient(ev.Arg)
 				if err != nil {
 					s.log.Warningf("Invalid RCPT TO argument '%v': %v", ev.Arg, err)
 					s.sConn.Reject()
 					break
 				}
-				rcpt := &account.Recipient{
-					ID:        rcptID,
-					User:      local,
-					Provider:  domain,
-					PublicKey: s.l.p.recipients.Get(rcptID),
-				}
 				if rcpt.PublicKey == nil {
-					s.log.Warningf("RCPT TO ('%v') does not specify a known recipient.", rcptID)
+					s.log.Warningf("RCPT TO ('%v') does not specify a known recipient.", rcpt.ID)
 					s.sConn.Reject()
 					break
 				}
-				s.log.Debugf("Added recipient: '%v'", rcptID)
+				s.log.Debugf("Added recipient: '%v'", rcpt.ID)
 				env.AddRecipient(rcpt)
 			case smtpd.DATA:
 			default:
@@ -218,23 +212,8 @@ func (s *smtpSession) onGotData(env *smtpEnvelope, b []byte, viaESMTP bool) erro
 		return nil
 	}
 
-	// Parse the message payload so that headers can be manipulated,
-	// and ensure that there is a Message-ID header, and prepend the
-	// "Received" header.
-	entity, err := imf.BytesToEntity(b)
-	if err != nil {
-		return err
-	}
-	imf.AddMessageID(entity)
-	imf.AddReceived(entity, true, viaESMTP)
-	isUnreliable, err := imf.IsUnreliable(entity)
-	if err != nil {
-		return err
-	}
-
-	// Re-serialize the IMF message now to apply the new headers,
-	// and canonicalize the line endings.
-	payload, err := imf.EntityToBytes(entity)
+	// Validate and pre-process the outgoing message body.
+	payload, entity, isUnreliable, err := s.l.p.preprocessOutgoing(b, viaESMTP)
 	if err != nil {
 		return err
 	}
