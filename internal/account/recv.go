@@ -387,6 +387,9 @@ func (a *Account) storeMessage(recvBkt *bolt.Bucket, payload []byte) {
 	// Store the message as the next sequence number.
 	seq, _ := spoolBkt.NextSequence()
 	a.dbEncryptAndPut(spoolBkt, uint64ToBytes(seq), payload)
+	if a.recvHandler != nil {
+		a.recvHandler(payload)
+	}
 }
 
 // StoreReport stores a locally generated report directly in the account's
