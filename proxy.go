@@ -29,6 +29,7 @@ import (
 	"github.com/katzenpost/mailproxy/config"
 	"github.com/katzenpost/mailproxy/internal/account"
 	"github.com/katzenpost/mailproxy/internal/authority"
+	"github.com/katzenpost/mailproxy/internal/imf"
 	"github.com/katzenpost/mailproxy/internal/recipient"
 	"gopkg.in/op/go-logging.v1"
 )
@@ -69,6 +70,74 @@ func (p *Proxy) initLogging() error {
 		p.log = p.logBackend.GetLogger("mailproxy")
 	}
 	return err
+}
+
+func (p *Proxy) SetReceiveHandler(senderID string, recvHandler func([]byte)) error {
+	accID, _, _, err := p.recipients.Normalize(senderID)
+	if err != nil {
+		return err
+	}
+	acc, err := p.accounts.Get(accID)
+	if err != nil {
+		return err
+	}
+	acc.SetReceiveHandler(recvHandler)
+	return nil
+}
+
+// SendMessage sends a message to a specified destination
+func (p *Proxy) SendMessage(senderID, recipientID string, payload []byte) error {
+	accID, _, _, err := p.recipients.Normalize(senderID)
+	if err != nil {
+		p.log.Warningf("Invalid sender identity '%v': %v", senderID, err)
+		return err
+	}
+	acc, err := p.accounts.Get(accID)
+	if err != nil {
+		p.log.Warningf("Sender identity ('%v') does not specify a valid account: %v", accID, err)
+		return err
+	}
+	defer acc.Deref()
+	rcptID, local, domain, err := p.recipients.Normalize(recipientID)
+	if err != nil {
+		p.log.Warningf("Invalid recipient identity argument '%v': %v", recipientID, err)
+		return err
+	}
+	rcpt := &account.Recipient{
+		ID:        rcptID,
+		User:      local,
+		Provider:  domain,
+		PublicKey: p.recipients.Get(rcptID),
+	}
+	if rcpt.PublicKey == nil {
+		p.log.Warningf("Recipient identity ('%v') does not specify a known recipient.", rcptID)
+		return errors.New("Recipient identity unknown.")
+	}
+	// Parse the message payload so that headers can be manipulated,
+	// and ensure that there is a Message-ID header, and prepend the
+	// "Received" header.
+	entity, err := imf.BytesToEntity(payload)
+	if err != nil {
+		return err
+	}
+	imf.AddMessageID(entity)
+	viaESMTP := false
+	imf.AddReceived(entity, true, viaESMTP)
+	isUnreliable, err := imf.IsUnreliable(entity)
+	if err != nil {
+		return err
+	}
+	// Re-serialize the IMF message now to apply the new headers,
+	// and canonicalize the line endings.
+	payloadIMF, err := imf.EntityToBytes(entity)
+	if err != nil {
+		return err
+	}
+	if err = acc.EnqueueMessage(rcpt, payloadIMF, isUnreliable); err != nil {
+		p.log.Errorf("Failed to enqueue for '%v': %v", rcpt, err)
+		return err
+	}
+	return nil
 }
 
 // Shutdown cleanly shuts down a given Proxy instance.

@@ -62,6 +62,8 @@ type Account struct {
 	lastDedupGC    uint64
 	lastFragsSweep uint64
 	lastSendGC     uint64
+
+	recvHandler func([]byte)
 }
 
 // Deref decrements the reference count of the Account.  If the reference count
@@ -195,6 +197,12 @@ func (a *Account) onDocument(doc *pki.Document) {
 
 func (a *Account) nowUnix() uint64 {
 	return uint64(time.Now().Unix())
+}
+
+// SetReceiveHandler is used by clients wishing to receive an
+// explicit notification when a message is received and fully reassembled.
+func (a *Account) SetReceiveHandler(recvHandler func([]byte)) {
+	a.recvHandler = recvHandler
 }
 
 func (s *Store) newAccount(id string, cfg *config.Account, pCfg *proxy.Config) (*Account, error) {
