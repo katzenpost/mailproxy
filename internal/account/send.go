@@ -628,7 +628,7 @@ func (a *Account) doSendGC() {
 
 				payload := a.dbGetAndDecrypt(msgBkt, []byte(plaintextKey))
 				if report, err := imf.NewBounce(a.id, addr, payload); err == nil {
-					a.storeMessage(recvBkt, report)
+					a.storeMessage(recvBkt, nil, report)
 				} else {
 					a.log.Errorf("Failed to generate a report: %v", err)
 				}

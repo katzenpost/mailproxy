@@ -33,8 +33,11 @@ package account
 //       - blockID          - A received block. (uint64 Block ID keys.
 //                              Optionally encrypted).
 //   - "spool"          - Messages ready for the user (POP3 spool).
-//     - `seqNR` - A message (BoltDB's per-bucket sequence number.
-//                   Optionally encrypted).
+//     - `seqNR` - A message (BoltDB's per-bucket sequence number.)
+//       - "messageID" - The receiver re-generated message ID of the
+//                         message.
+//       - "sender"    - The sender public key, if any.
+//       - "plaintext" - The message payload (Optionally encrypted).
 //   - "dedup"          - Message de-duplication.
 //     - senderPK | messageID   - The receive unix time (uint64).
 //     - SHA512/256(ciphertext) - Ditto, for failed decryptions.
@@ -49,11 +52,13 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"runtime"
 	"time"
 
 	bolt "github.com/coreos/bbolt"
 	"github.com/katzenpost/core/crypto/ecdh"
+	"github.com/katzenpost/core/crypto/rand"
 	"github.com/katzenpost/mailproxy/internal/imf"
 	"github.com/katzenpost/mailproxy/internal/pop3"
 	"github.com/katzenpost/minclient/block"
@@ -68,7 +73,10 @@ const (
 	totalBlocksKey    = "totalBlocks"
 	lastRecvKey       = "lastRecv"
 	spoolBucket       = "spool"
-	dedupBucket       = "dedup"
+	// messageID - also a subkey of a send entry.
+	senderKey = "sender"
+	// plaintest - also a subkey of a send entry.
+	dedupBucket = "dedup"
 )
 
 func (a *Account) recvWorker() {
@@ -186,7 +194,7 @@ func (a *Account) onBlockDecryptFailure(recvBkt *bolt.Bucket, msg []byte) {
 		a.log.Errorf("Failed to generate a report: %v", err)
 		return
 	}
-	a.storeMessage(recvBkt, report)
+	a.storeMessage(recvBkt, nil, report)
 }
 
 func (a *Account) onBlock(recvBkt *bolt.Bucket, sender *ecdh.PublicKey, blk *block.Block) error {
@@ -338,7 +346,7 @@ func (a *Account) storeRecvMessage(recvBkt *bolt.Bucket, id, payload []byte) {
 			a.log.Errorf("Failed to generate a report: %v", err)
 			return
 		}
-		a.storeMessage(recvBkt, report)
+		a.storeMessage(recvBkt, nil, report)
 		return
 	}
 
@@ -352,7 +360,7 @@ func (a *Account) storeRecvMessage(recvBkt *bolt.Bucket, id, payload []byte) {
 			a.log.Errorf("Failed to generate a report: %v", err)
 			return
 		}
-		a.storeMessage(recvBkt, report)
+		a.storeMessage(recvBkt, nil, report)
 		return
 	}
 
@@ -371,22 +379,33 @@ func (a *Account) storeRecvMessage(recvBkt *bolt.Bucket, id, payload []byte) {
 			a.log.Errorf("Failed to generate a report: %v", err)
 			return
 		}
-		a.storeMessage(recvBkt, report)
+		a.storeMessage(recvBkt, nil, report)
 		return
 	}
 
 	a.log.Debugf("Message %v ToStore: %v", idStr, hex.Dump(toStore))
-	a.storeMessage(recvBkt, toStore)
+	a.storeMessage(recvBkt, sender, toStore)
 }
 
-func (a *Account) storeMessage(recvBkt *bolt.Bucket, payload []byte) {
+func (a *Account) storeMessage(recvBkt *bolt.Bucket, sender *ecdh.PublicKey, payload []byte) {
 	// At this point payload is a valid IMF format mail, that is ready
 	// to be thrown into the spool.
 	spoolBkt := recvBkt.Bucket([]byte(spoolBucket))
 
+	// Generate a unique message identifier for use with the non-POP API.
+	var recvID [block.MessageIDLength]byte
+	if _, err := io.ReadFull(rand.Reader, recvID[:]); err != nil {
+		panic("BUG: recv: Failed to generate recvID: " + err.Error())
+	}
+
 	// Store the message as the next sequence number.
 	seq, _ := spoolBkt.NextSequence()
-	a.dbEncryptAndPut(spoolBkt, uint64ToBytes(seq), payload)
+	msgBkt, _ := spoolBkt.CreateBucket(uint64ToBytes(seq))
+	msgBkt.Put([]byte(messageIDKey), recvID[:])
+	if sender != nil {
+		msgBkt.Put([]byte(senderKey), sender.Bytes())
+	}
+	a.dbEncryptAndPut(msgBkt, []byte(plaintextKey), payload)
 }
 
 // StoreReport stores a locally generated report directly in the account's
@@ -395,7 +414,7 @@ func (a *Account) StoreReport(payload []byte) error {
 	return a.db.Update(func(tx *bolt.Tx) error {
 		recvBkt := tx.Bucket([]byte(recvBucket))
 
-		a.storeMessage(recvBkt, payload)
+		a.storeMessage(recvBkt, nil, payload)
 		return nil
 	})
 }
@@ -506,7 +525,9 @@ func (a *Account) doFragsSweep() {
 			if err != nil {
 				a.log.Errorf("Failed to generate a report: %v", err)
 			} else {
-				a.storeMessage(recvBkt, report)
+				// This has a valid sender, but the reassembly failed and
+				// it's a report now.
+				a.storeMessage(recvBkt, nil, report)
 			}
 
 			a.testDuplicate(recvBkt, k, true)
@@ -560,11 +581,12 @@ func (a *Account) newPOPSession() (pop3.BackendSession, error) {
 		spoolBkt := recvBkt.Bucket([]byte(spoolBucket))
 
 		cur := spoolBkt.Cursor()
-		for k, v := cur.First(); k != nil; k, v = cur.Next() {
+		for k, _ := cur.First(); k != nil; k, _ = cur.Next() {
 			s.sequenceMap[idx] = binary.BigEndian.Uint64(k)
 
+			msgBkt := spoolBkt.Bucket(k)
 			// Copy, v is invalidated at the end of the transaction.
-			pt := a.dbDecrypt(v) // Can return v as is, DO NOT REMOVE THE COPY.
+			pt := a.dbGetAndDecrypt(msgBkt, []byte(plaintextKey)) // Can return v as is, DO NOT REMOVE THE COPY.
 			msg := make([]byte, 0, len(pt))
 			msg = append(msg, pt...)
 			s.messages = append(s.messages, msg)
@@ -605,7 +627,7 @@ func (s *popSession) DeleteMessages(msgs []int) error {
 				continue
 			}
 
-			spoolBkt.Delete(uint64ToBytes(seq))
+			spoolBkt.DeleteBucket(uint64ToBytes(seq))
 		}
 
 		// Reset the sequence number if the spool was depleted.
