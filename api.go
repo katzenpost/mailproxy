@@ -14,13 +14,13 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-// Package mailproxy implements a POP/SMTP to Katzenpost proxy server.
 package mailproxy
 
 import (
 	"errors"
 
 	"github.com/emersion/go-message"
+	"github.com/katzenpost/core/crypto/ecdh"
 	"github.com/katzenpost/mailproxy/internal/account"
 	"github.com/katzenpost/mailproxy/internal/imf"
 )
@@ -29,6 +29,10 @@ var (
 	// ErrUnknownRecipient is the error that is returned when a recipient for
 	// which there is no public key is specified.
 	ErrUnknownRecipient = errors.New("mailproxy/api: unknown recipient, missing public key")
+
+	// ErrNoMessages is the error that is returned when an account's receive
+	// queue is empty.
+	ErrNoMessages = errors.New("mailproxy/api: account receive queue empty.")
 )
 
 // SendMessage enqueues payload for transmission from the sender to the
@@ -38,14 +42,8 @@ var (
 // result in a delivery status notification message being sent from the
 // postmaster to the senderID account.
 func (p *Proxy) SendMessage(senderID, recipientID string, payload []byte) error {
-	accID, _, _, err := p.recipients.Normalize(senderID)
+	acc, _, err := p.getAccount(senderID)
 	if err != nil {
-		p.log.Warningf("Invalid sender identity '%v': %v", senderID, err)
-		return err
-	}
-	acc, err := p.accounts.Get(accID)
-	if err != nil {
-		p.log.Warningf("Sender identity ('%v') does not specify a valid account: %v", accID, err)
 		return err
 	}
 	defer acc.Deref()
@@ -108,4 +106,46 @@ func (p *Proxy) preprocessOutgoing(b []byte, viaESMTP bool) ([]byte, *message.En
 	payload, err := imf.EntityToBytes(entity)
 
 	return payload, entity, isUnreliable, err
+}
+
+// ReceivePeek returns the eldest message in the given account's receive queue,
+// the sender's public key if any, and a unique identifier tag. The account's
+// receive queue is left intact.
+func (p *Proxy) ReceivePeek(accountID string) ([]byte, *ecdh.PublicKey, []byte, error) {
+	return p.doReceivePeekPop(accountID, false)
+}
+
+// ReceivePop removes and returns the eldest message in the given account's
+// receive queue, the sender's public key if any, and a unique identifier tag.
+func (p *Proxy) ReceivePop(accountID string) ([]byte, *ecdh.PublicKey, []byte, error) {
+	return p.doReceivePeekPop(accountID, true)
+}
+
+func (p *Proxy) doReceivePeekPop(accountID string, isPop bool) ([]byte, *ecdh.PublicKey, []byte, error) {
+	acc, _, err := p.getAccount(accountID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	defer acc.Deref()
+
+	msg, sender, msgID, err := acc.ReceivePeekPop(isPop)
+	if msg == nil && sender == nil && msgID == nil && err == nil {
+		// Allow the caller to easily distinguish an empty queue.
+		err = ErrNoMessages
+	}
+	return msg, sender, msgID, err
+}
+
+func (p *Proxy) getAccount(accountID string) (*account.Account, string, error) {
+	accID, _, _, err := p.recipients.Normalize(accountID)
+	if err != nil {
+		p.log.Warningf("Invalid account identifier '%v': %v", accountID, err)
+		return nil, "", err
+	}
+	acc, err := p.accounts.Get(accID)
+	if err != nil {
+		p.log.Warningf("Account identifier ('%v') does not specify a valid account: %v", accountID, err)
+		return nil, "", err
+	}
+	return acc, accID, nil
 }

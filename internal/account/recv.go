@@ -562,6 +562,46 @@ func (a *Account) reassembleFragments(bkt *bolt.Bucket, totalBlocks uint64) ([]b
 	return b, nil
 }
 
+func (a *Account) ReceivePeekPop(isPop bool) ([]byte, *ecdh.PublicKey, []byte, error) {
+	tx, err := a.db.Begin(isPop)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	defer tx.Rollback()
+
+	recvBkt := tx.Bucket([]byte(recvBucket))
+	spoolBkt := recvBkt.Bucket([]byte(spoolBucket))
+
+	// Grab the eldest message.
+	cur := spoolBkt.Cursor()
+	mKey, _ := cur.First()
+	if mKey == nil {
+		// The receive bucket is empty.
+		return nil, nil, nil, nil
+	}
+
+	// There is a message to return.
+	msgBkt := spoolBkt.Bucket(mKey)
+
+	pt := a.dbGetAndDecrypt(msgBkt, []byte(plaintextKey))
+	msg := make([]byte, 0, len(pt))
+	msg = append(msg, pt...)
+	msgID := append([]byte{}, msgBkt.Get([]byte(messageIDKey))...)
+	var sender *ecdh.PublicKey
+	if rawPub := msgBkt.Get([]byte(senderKey)); rawPub != nil {
+		sender = new(ecdh.PublicKey)
+		sender.FromBytes(rawPub)
+	}
+
+	if isPop {
+		spoolBkt.Delete(mKey)
+		a.resetSpoolSeq(spoolBkt)
+		err = tx.Commit()
+	}
+
+	return msg, sender, msgID, err
+}
+
 func (a *Account) newPOPSession() (pop3.BackendSession, error) {
 	a.Lock()
 	defer a.Unlock()
@@ -585,8 +625,7 @@ func (a *Account) newPOPSession() (pop3.BackendSession, error) {
 			s.sequenceMap[idx] = binary.BigEndian.Uint64(k)
 
 			msgBkt := spoolBkt.Bucket(k)
-			// Copy, v is invalidated at the end of the transaction.
-			pt := a.dbGetAndDecrypt(msgBkt, []byte(plaintextKey)) // Can return v as is, DO NOT REMOVE THE COPY.
+			pt := a.dbGetAndDecrypt(msgBkt, []byte(plaintextKey)) // MUST COPY.
 			msg := make([]byte, 0, len(pt))
 			msg = append(msg, pt...)
 			s.messages = append(s.messages, msg)

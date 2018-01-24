@@ -155,15 +155,9 @@ evLoop:
 			case smtpd.RSET:
 				env.Reset()
 			case smtpd.MAILFROM:
-				accID, _, _, err := s.l.p.recipients.Normalize(ev.Arg)
+				acc, accID, err := s.l.p.getAccount(ev.Arg)
 				if err != nil {
 					s.log.Warningf("Invalid MAIL FROM argument '%v': %v", ev.Arg, err)
-					s.sConn.Reject()
-					break
-				}
-				acc, err := s.l.p.accounts.Get(accID)
-				if err != nil {
-					s.log.Warningf("MAIL FROM ('%v') does not specify a valid account: %v", accID, err)
 					s.sConn.Reject()
 					break
 				}
