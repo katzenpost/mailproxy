@@ -32,7 +32,7 @@ var (
 
 	// ErrNoMessages is the error that is returned when an account's receive
 	// queue is empty.
-	ErrNoMessages = errors.New("mailproxy/api: account receive queue empty.")
+	ErrNoMessages = errors.New("mailproxy/api: account receive queue empty")
 )
 
 // SendMessage enqueues payload for transmission from the sender to the
@@ -148,4 +148,34 @@ func (p *Proxy) getAccount(accountID string) (*account.Account, string, error) {
 		return nil, "", err
 	}
 	return acc, accID, nil
+}
+
+// GetRecipient returns the public key for the provided recipient, or nil iff
+// the recipient is unknown.
+func (p *Proxy) GetRecipient(recipientID string) (*ecdh.PublicKey, error) {
+	// Somewhat redundant because Store.Get will also normalize, but
+	// Get treats parse errors as unknown recipients rather than
+	// returning an error.
+	if _, _, _, err := p.recipients.Normalize(recipientID); err != nil {
+		return nil, err
+	}
+
+	return p.recipients.Get(recipientID), nil
+}
+
+// SetRecipient sets the public key for the provided recipient.
+func (p *Proxy) SetRecipient(recipientID string, publicKey *ecdh.PublicKey) error {
+	return p.recipients.Set(recipientID, publicKey)
+}
+
+// RemoveRecipient removes the provided recipient.
+func (p *Proxy) RemoveRecipient(recipientID string) error {
+	return p.recipients.Clear(recipientID)
+}
+
+// ListRecipients returns a map of recipientIDs to public keys consisting of
+// all currently known entries.  Modifications to the returned map have no
+// effect.
+func (p *Proxy) ListRecipients() map[string]*ecdh.PublicKey {
+	return p.recipients.CloneRecipients()
 }

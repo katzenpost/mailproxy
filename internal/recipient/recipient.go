@@ -138,14 +138,17 @@ func (s *Store) Clear(r string) error {
 	return errNoSuchRecipient
 }
 
-func (s *Store) cloneRecipients() map[string]*ecdh.PublicKey {
+// CloneRecipients returns a copy of the internal recipient map.
+func (s *Store) CloneRecipients() map[string]*ecdh.PublicKey {
 	m := make(map[string]*ecdh.PublicKey)
 
 	s.Lock()
 	defer s.Unlock()
 
 	for addr, pubKey := range s.recipients {
-		m[addr] = pubKey
+		pk := new(ecdh.PublicKey)
+		pk.FromBytes(pubKey.Bytes())
+		m[addr] = pk
 	}
 	return m
 }
@@ -210,7 +213,7 @@ func (s *Store) onListRecipients(c *thwack.Conn, l string) error {
 	}
 
 	wr := c.Writer().DotWriter()
-	recipients := s.cloneRecipients()
+	recipients := s.CloneRecipients()
 	for addr, pubKey := range recipients {
 		if _, err := fmt.Fprintf(wr, "%v %v\n", addr, pubKey); err != nil {
 			wr.Close()
