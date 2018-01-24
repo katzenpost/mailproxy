@@ -75,6 +75,8 @@ func (a *Account) worker() {
 				a.doSendGC()
 				continue
 			case *opConnStatusChanged:
+				// Note: a.isConnected isn't used in favor of passing the
+				// value via an op, to save on locking headaches.
 				if isConnected = op.isConnected; isConnected {
 					const skewWarnDelta = 2 * time.Minute
 					a.onlineAt = time.Now()

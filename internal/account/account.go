@@ -62,6 +62,8 @@ type Account struct {
 	lastDedupGC    uint64
 	lastFragsSweep uint64
 	lastSendGC     uint64
+
+	isConnected bool
 }
 
 // Deref decrements the reference count of the Account.  If the reference count
@@ -158,6 +160,8 @@ func (a *Account) onConn(isConnected bool) {
 	a.Lock()
 	defer a.Unlock()
 
+	a.isConnected = isConnected
+
 	if a.refCount > 0 {
 		// Wake up the worker so it can adjust it's send scheduling.
 		a.opCh <- &opConnStatusChanged{isConnected}
@@ -195,6 +199,14 @@ func (a *Account) onDocument(doc *pki.Document) {
 
 func (a *Account) nowUnix() uint64 {
 	return uint64(time.Now().Unix())
+}
+
+// IsConnected returns true iff the account is connected.
+func (a *Account) IsConnected() bool {
+	a.Lock()
+	defer a.Unlock()
+
+	return a.isConnected
 }
 
 func (s *Store) newAccount(id string, cfg *config.Account, pCfg *proxy.Config) (*Account, error) {

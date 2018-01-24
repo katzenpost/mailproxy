@@ -184,3 +184,14 @@ func (p *Proxy) RemoveRecipient(recipientID string) error {
 func (p *Proxy) ListRecipients() map[string]*ecdh.PublicKey {
 	return p.recipients.CloneRecipients()
 }
+
+// IsConnected returns true iff a connection to the provider is established.
+func (p *Proxy) IsConnected(accountID string) bool {
+	acc, _, err := p.getAccount(accountID)
+	if err != nil {
+		return false
+	}
+	defer acc.Deref()
+
+	return acc.IsConnected()
+}
