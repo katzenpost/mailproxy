@@ -183,7 +183,9 @@ func (s *contextSOCKS5) dialContext(ctx context.Context, network, address string
 		// Do the "right" thing based on the context.
 		select {
 		case <-ctx.Done():
-			conn.Close()
+			if conn != nil {
+				conn.Close()
+			}
 		case <-fwdDialer.connCh:
 		}
 	}()
