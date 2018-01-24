@@ -562,6 +562,9 @@ func (a *Account) reassembleFragments(bkt *bolt.Bucket, totalBlocks uint64) ([]b
 	return b, nil
 }
 
+// ReceivePeekPop returns the eldest message in the receive queue, the sender's
+// public key, and a unique identifier, optionally after removing the message
+// from the queue.
 func (a *Account) ReceivePeekPop(isPop bool) ([]byte, *ecdh.PublicKey, []byte, error) {
 	tx, err := a.db.Begin(isPop)
 	if err != nil {
