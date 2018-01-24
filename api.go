@@ -150,8 +150,7 @@ func (p *Proxy) getAccount(accountID string) (*account.Account, string, error) {
 	return acc, accID, nil
 }
 
-// GetRecipient returns the public key for the provided recipient, or nil iff
-// the recipient is unknown.
+// GetRecipient returns the public key for the provided recipient.
 func (p *Proxy) GetRecipient(recipientID string) (*ecdh.PublicKey, error) {
 	// Somewhat redundant because Store.Get will also normalize, but
 	// Get treats parse errors as unknown recipients rather than
@@ -160,7 +159,11 @@ func (p *Proxy) GetRecipient(recipientID string) (*ecdh.PublicKey, error) {
 		return nil, err
 	}
 
-	return p.recipients.Get(recipientID), nil
+	pk := p.recipients.Get(recipientID)
+	if pk == nil {
+		err = ErrUnknownRecipient
+	}
+	return pk, err
 }
 
 // SetRecipient sets the public key for the provided recipient.
