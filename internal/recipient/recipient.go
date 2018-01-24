@@ -19,6 +19,7 @@ package recipient
 
 import (
 	"errors"
+	"fmt"
 	"net/mail"
 	"strings"
 	"sync"
@@ -137,6 +138,18 @@ func (s *Store) Clear(r string) error {
 	return errNoSuchRecipient
 }
 
+func (s *Store) cloneRecipients() map[string]*ecdh.PublicKey {
+	m := make(map[string]*ecdh.PublicKey)
+
+	s.Lock()
+	defer s.Unlock()
+
+	for addr, pubKey := range s.recipients {
+		m[addr] = pubKey
+	}
+	return m
+}
+
 func (s *Store) onGetRecipient(c *thwack.Conn, l string) error {
 	sp := strings.Split(l, " ")
 	if len(sp) != 2 {
@@ -190,6 +203,23 @@ func (s *Store) onRemoveRecipient(c *thwack.Conn, l string) error {
 	return c.WriteReply(thwack.StatusOk)
 }
 
+func (s *Store) onListRecipients(c *thwack.Conn, l string) error {
+	if sp := strings.Split(l, " "); len(sp) != 1 {
+		c.Log().Debugf("LIST_RECIPIENTS invalid syntax: '%v'", l)
+		return c.WriteReply(thwack.StatusSyntaxError)
+	}
+
+	wr := c.Writer().DotWriter()
+	recipients := s.cloneRecipients()
+	for addr, pubKey := range recipients {
+		if _, err := fmt.Fprintf(wr, "%v %v\n", addr, pubKey); err != nil {
+			wr.Close()
+			return err
+		}
+	}
+	return wr.Close()
+}
+
 // New constructs a new Store instance.
 func New(dCfg *config.Debug, t *thwack.Server) *Store {
 	s := new(Store)
@@ -202,11 +232,13 @@ func New(dCfg *config.Debug, t *thwack.Server) *Store {
 			cmdGetRecipient    = "GET_RECIPIENT"
 			cmdSetRecipient    = "SET_RECIPIENT"
 			cmdRemoveRecipient = "REMOVE_RECIPIENT"
+			cmdListRecipients  = "LIST_RECIPIENTS"
 		)
 
 		t.RegisterCommand(cmdGetRecipient, s.onGetRecipient)
 		t.RegisterCommand(cmdSetRecipient, s.onSetRecipient)
 		t.RegisterCommand(cmdRemoveRecipient, s.onRemoveRecipient)
+		t.RegisterCommand(cmdListRecipients, s.onListRecipients)
 	}
 
 	return s
