@@ -403,7 +403,7 @@ func (a *Account) storeMessage(recvBkt *bolt.Bucket, sender *ecdh.PublicKey, pay
 	msgBkt, _ := spoolBkt.CreateBucket(uint64ToBytes(seq))
 	msgBkt.Put([]byte(messageIDKey), recvID[:])
 	if sender != nil {
-		msgBkt.Put([]byte(senderKey), sender.Bytes())
+		a.dbEncryptAndPut(msgBkt, []byte(senderKey), sender.Bytes())
 	}
 	a.dbEncryptAndPut(msgBkt, []byte(plaintextKey), payload)
 }
@@ -591,7 +591,7 @@ func (a *Account) ReceivePeekPop(isPop bool) ([]byte, *ecdh.PublicKey, []byte, e
 	msg = append(msg, pt...)
 	msgID := append([]byte{}, msgBkt.Get([]byte(messageIDKey))...)
 	var sender *ecdh.PublicKey
-	if rawPub := msgBkt.Get([]byte(senderKey)); rawPub != nil {
+	if rawPub := a.dbGetAndDecrypt(msgBkt, []byte(senderKey)); rawPub != nil {
 		sender = new(ecdh.PublicKey)
 		sender.FromBytes(rawPub)
 	}
