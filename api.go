@@ -155,7 +155,8 @@ func (p *Proxy) GetRecipient(recipientID string) (*ecdh.PublicKey, error) {
 	// Somewhat redundant because Store.Get will also normalize, but
 	// Get treats parse errors as unknown recipients rather than
 	// returning an error.
-	if _, _, _, err := p.recipients.Normalize(recipientID); err != nil {
+	_, _, _, err := p.recipients.Normalize(recipientID)
+	if err != nil {
 		return nil, err
 	}
 
@@ -171,7 +172,8 @@ func (p *Proxy) SetRecipient(recipientID string, publicKey *ecdh.PublicKey) erro
 	return p.recipients.Set(recipientID, publicKey)
 }
 
-// RemoveRecipient removes the provided recipient.
+// RemoveRecipient removes the provided recipient.  This has no impact on
+// messages that have already been enqueued for transmission via SendMessage.
 func (p *Proxy) RemoveRecipient(recipientID string) error {
 	return p.recipients.Clear(recipientID)
 }
