@@ -51,11 +51,9 @@ func (p *Proxy) SendMessage(senderID, recipientID string, payload []byte) error 
 
 	rcpt, err := p.toAccountRecipient(recipientID)
 	if err != nil {
-		p.log.Warningf("Invalid recipient identity argument '%v': %v", recipientID, err)
 		return err
 	}
 	if rcpt.PublicKey == nil {
-		p.log.Warningf("Recipient identity ('%v') does not specify a known recipient.", rcpt.ID)
 		return ErrUnknownRecipient
 	}
 
@@ -67,7 +65,6 @@ func (p *Proxy) SendMessage(senderID, recipientID string, payload []byte) error 
 
 	// Enqueue the outgoing message.
 	if err = acc.EnqueueMessage(rcpt, payloadIMF, isUnreliable); err != nil {
-		p.log.Errorf("Failed to enqueue for '%v': %v", rcpt, err)
 		return err
 	}
 	return nil
@@ -140,12 +137,10 @@ func (p *Proxy) doReceivePeekPop(accountID string, isPop bool) ([]byte, *ecdh.Pu
 func (p *Proxy) getAccount(accountID string) (*account.Account, string, error) {
 	accID, _, _, err := p.recipients.Normalize(accountID)
 	if err != nil {
-		p.log.Warningf("Invalid account identifier '%v': %v", accountID, err)
 		return nil, "", err
 	}
 	acc, err := p.accounts.Get(accID)
 	if err != nil {
-		p.log.Warningf("Account identifier ('%v') does not specify a valid account: %v", accountID, err)
 		return nil, "", err
 	}
 	return acc, accID, nil
@@ -214,7 +209,6 @@ func (p *Proxy) apiEventWorker() {
 				case <-p.HaltCh():
 					return
 				case ev := <-flushCh:
-					p.log.Debugf("Event: %T: %v", ev, ev)
 					p.cfg.Proxy.EventSink <- ev
 				}
 			}
