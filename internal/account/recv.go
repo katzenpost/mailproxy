@@ -59,6 +59,7 @@ import (
 	bolt "github.com/coreos/bbolt"
 	"github.com/katzenpost/core/crypto/ecdh"
 	"github.com/katzenpost/core/crypto/rand"
+	"github.com/katzenpost/mailproxy/event"
 	"github.com/katzenpost/mailproxy/internal/imf"
 	"github.com/katzenpost/mailproxy/internal/pop3"
 	"github.com/katzenpost/minclient/block"
@@ -406,6 +407,14 @@ func (a *Account) storeMessage(recvBkt *bolt.Bucket, sender *ecdh.PublicKey, pay
 		a.dbEncryptAndPut(msgBkt, []byte(senderKey), sender.Bytes())
 	}
 	a.dbEncryptAndPut(msgBkt, []byte(plaintextKey), payload)
+
+	// Dispatching this here is kind of rude, but the internal event
+	// queue should be swept fairly quickly, and is buffered.
+	a.s.eventCh <- &event.MessageReceivedEvent{
+		AccountID: a.id,
+		Sender:    sender,
+		MessageID: append([]byte{}, recvID[:]...),
+	}
 }
 
 // StoreReport stores a locally generated report directly in the account's

@@ -28,6 +28,7 @@ import (
 	"github.com/katzenpost/core/utils"
 	"github.com/katzenpost/core/worker"
 	"github.com/katzenpost/mailproxy/config"
+	"github.com/katzenpost/mailproxy/event"
 	"github.com/katzenpost/mailproxy/internal/authority"
 	"github.com/katzenpost/mailproxy/internal/proxy"
 	"github.com/katzenpost/minclient"
@@ -156,6 +157,11 @@ func (a *Account) initKeys(cfg *config.Account) error {
 
 func (a *Account) onConn(isConnected bool) {
 	a.log.Debugf("onConn(%v)", isConnected)
+
+	a.s.eventCh <- &event.ConnectionStatusEvent{
+		AccountID:   a.id,
+		IsConnected: isConnected,
+	}
 
 	a.Lock()
 	defer a.Unlock()

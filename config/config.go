@@ -33,6 +33,7 @@ import (
 	"github.com/katzenpost/core/log"
 	"github.com/katzenpost/core/pki"
 	"github.com/katzenpost/core/utils"
+	"github.com/katzenpost/mailproxy/event"
 	"github.com/katzenpost/mailproxy/internal/authority"
 	"github.com/katzenpost/mailproxy/internal/proxy"
 	"golang.org/x/net/idna"
@@ -72,6 +73,9 @@ type Proxy struct {
 	// useful if you are using mailproxy as a library rather than a
 	// stand-alone process.
 	NoLaunchListeners bool
+
+	// EventSink is the API event sink.
+	EventSink chan event.Event `toml:"-"`
 }
 
 func (pCfg *Proxy) applyDefaults() {

@@ -26,10 +26,12 @@ import (
 	"github.com/katzenpost/core/log"
 	"github.com/katzenpost/core/thwack"
 	"github.com/katzenpost/core/utils"
+	"github.com/katzenpost/core/worker"
 	"github.com/katzenpost/mailproxy/config"
 	"github.com/katzenpost/mailproxy/internal/account"
 	"github.com/katzenpost/mailproxy/internal/authority"
 	"github.com/katzenpost/mailproxy/internal/recipient"
+	"gopkg.in/eapache/channels.v1"
 	"gopkg.in/op/go-logging.v1"
 )
 
@@ -38,6 +40,7 @@ var ErrGenerateOnly = errors.New("mailproxy: GenerateOnly set")
 
 // Proxy is a mail proxy server instance.
 type Proxy struct {
+	worker.Worker
 	cfg *config.Config
 
 	logBackend *log.Backend
@@ -51,6 +54,7 @@ type Proxy struct {
 	management   *thwack.Server
 
 	fatalErrCh chan error
+	eventCh    channels.Channel
 	haltedCh   chan interface{}
 	haltOnce   sync.Once
 }
@@ -114,6 +118,7 @@ func (p *Proxy) halt() {
 	}
 
 	close(p.fatalErrCh)
+	p.Halt()
 
 	p.log.Noticef("Shutdown complete.")
 	close(p.haltedCh)
@@ -122,10 +127,13 @@ func (p *Proxy) halt() {
 // New returns a new Proxy instance parameterized with the specified
 // configuration.
 func New(cfg *config.Config) (*Proxy, error) {
+	const eventChCapacity = 64
+
 	p := new(Proxy)
 	p.cfg = cfg
 	p.fatalErrCh = make(chan error)
 	p.haltedCh = make(chan interface{})
+	p.eventCh = channels.NewRingChannel(eventChCapacity)
 	g := &proxyGlue{p: p}
 
 	// Do the early initialization and bring up logging.
@@ -155,10 +163,14 @@ func New(cfg *config.Config) (*Proxy, error) {
 		p.Shutdown()
 	}()
 
+	if !p.cfg.Debug.GenerateOnly {
+		p.Go(p.apiEventWorker)
+	}
+
 	var err error
 	// Bring the management interface online if enabled.
 	if !p.cfg.Debug.GenerateOnly && p.cfg.Management.Enable {
-		p.log.Noticef("bringing managment interface online")
+		p.log.Noticef("Bringing managment interface online.")
 		mgmtCfg := &thwack.Config{
 			Net:         "unix",
 			Addr:        p.cfg.Management.Path,
@@ -253,6 +265,10 @@ func (g *proxyGlue) LogBackend() *log.Backend {
 
 func (g *proxyGlue) Authorities() *authority.Store {
 	return g.p.authorities
+}
+
+func (g *proxyGlue) EventCh() chan<- interface{} {
+	return g.p.eventCh.In()
 }
 
 func (g *proxyGlue) FatalErrCh() chan<- error {

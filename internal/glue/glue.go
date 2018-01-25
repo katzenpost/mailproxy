@@ -29,5 +29,6 @@ type ProxyInternals interface {
 	Config() *config.Config
 	LogBackend() *log.Backend
 	Authorities() *authority.Store
+	EventCh() chan<- interface{}
 	FatalErrCh() chan<- error
 }

@@ -21,6 +21,7 @@ import (
 
 	"github.com/emersion/go-message"
 	"github.com/katzenpost/core/crypto/ecdh"
+	"github.com/katzenpost/mailproxy/event"
 	"github.com/katzenpost/mailproxy/internal/account"
 	"github.com/katzenpost/mailproxy/internal/imf"
 )
@@ -194,4 +195,44 @@ func (p *Proxy) IsConnected(accountID string) bool {
 	defer acc.Deref()
 
 	return acc.IsConnected()
+}
+
+func (p *Proxy) apiEventWorker() {
+	defer p.eventCh.Close()
+
+	// The main reason why this helper exists is so that the internal event
+	// generation code can assume there is an event sync regardless of if
+	// the caller has specified an event listener or not.
+
+	var flushCh chan event.Event
+	if p.cfg.Proxy.EventSink != nil {
+		flushCh = make(chan event.Event)
+		defer close(flushCh)
+		p.Go(func() {
+			for {
+				select {
+				case <-p.HaltCh():
+					return
+				case ev := <-flushCh:
+					p.log.Debugf("Event: %T: %v", ev, ev)
+					p.cfg.Proxy.EventSink <- ev
+				}
+			}
+		})
+	}
+
+	for {
+		select {
+		case <-p.HaltCh():
+			return
+		case ev := <-p.eventCh.Out():
+			if flushCh != nil {
+				// "Bad" things will happen if the sink is slow, but
+				// p.eventCh is a drop-head buffered channel with a
+				// fairly large capacity, so the "bad" is limited to
+				// missed events.
+				flushCh <- ev.(event.Event)
+			}
+		}
+	}
 }
