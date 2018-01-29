@@ -412,7 +412,7 @@ func (a *Account) storeMessage(recvBkt *bolt.Bucket, sender *ecdh.PublicKey, pay
 	// queue should be swept fairly quickly, and is buffered.
 	a.s.eventCh <- &event.MessageReceivedEvent{
 		AccountID: a.id,
-		Sender:    sender,
+		SenderKey: sender,
 		MessageID: append([]byte{}, recvID[:]...),
 	}
 }

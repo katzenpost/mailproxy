@@ -53,8 +53,8 @@ type MessageReceivedEvent struct {
 	// the event.
 	AccountID string
 
-	// Sender is the message sender's public key, if any.
-	Sender *ecdh.PublicKey
+	// SenderKey is the message sender's public key, if any.
+	SenderKey *ecdh.PublicKey
 
 	// MessageID is the local unique identifier for the message.
 	MessageID []byte
@@ -62,5 +62,5 @@ type MessageReceivedEvent struct {
 
 // String returns a string representation of the MessageReceivedEvent.
 func (e *MessageReceivedEvent) String() string {
-	return fmt.Sprintf("MessageReceived[%v]: %v %v", e.AccountID, e.Sender, hex.EncodeToString(e.MessageID))
+	return fmt.Sprintf("MessageReceived[%v]: %v %v", e.AccountID, e.SenderKey, hex.EncodeToString(e.MessageID))
 }
