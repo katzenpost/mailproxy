@@ -192,7 +192,7 @@ func New(cfg *config.Config) (*Proxy, error) {
 
 	// Initialize the recipient public key store.
 	p.recipients = recipient.New(p.cfg.Debug, p.management)
-	for k, v := range p.cfg.Recipients {
+	for k, v := range p.cfg.RecipientsMap() {
 		// Failures to add recipients are non-fatal.
 		if err = p.recipients.Set(k, v); err != nil {
 			p.log.Warningf("Failed to add recipient '%v' to store: %v", k, err)

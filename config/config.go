@@ -337,10 +337,11 @@ type Config struct {
 
 	NonvotingAuthority map[string]*NonvotingAuthority
 	Account            []*Account
-	Recipients         map[string]*ecdh.PublicKey
+	Recipients         map[string]string
 
 	authorities map[string]authority.Factory
 	accounts    map[string]*Account
+	recipients  map[string]*ecdh.PublicKey
 
 	upstreamProxy *proxy.Config
 }
@@ -355,6 +356,12 @@ func (cfg *Config) AuthorityMap() map[string]authority.Factory {
 // Config.
 func (cfg *Config) AccountMap() map[string]*Account {
 	return cfg.accounts
+}
+
+// RecipientsMap returns the recipient->public key mapping specified in the
+// Config.
+func (cfg *Config) RecipientsMap() map[string]*ecdh.PublicKey {
+	return cfg.recipients
 }
 
 // UpstreamProxyConfig returns the configured upstream proxy, suitable for
@@ -387,10 +394,11 @@ func (cfg *Config) FixupAndValidate() error {
 	}
 	cfg.Debug.applyDefaults()
 	if cfg.Recipients == nil {
-		cfg.Recipients = make(map[string]*ecdh.PublicKey)
+		cfg.Recipients = make(map[string]string)
 	}
 	cfg.authorities = make(map[string]authority.Factory)
 	cfg.accounts = make(map[string]*Account)
+	cfg.recipients = make(map[string]*ecdh.PublicKey)
 
 	// Validate/fixup the various sections.
 	if err := cfg.Proxy.validate(); err != nil {
@@ -431,6 +439,13 @@ func (cfg *Config) FixupAndValidate() error {
 			return fmt.Errorf("config: Account '%v' is defined multiple times", addr)
 		}
 		cfg.accounts[addr] = v
+	}
+	for k, v := range cfg.Recipients {
+		pk := new(ecdh.PublicKey)
+		if err := pk.FromString(v); err != nil {
+			return fmt.Errorf("config: Recipient '%v' is invalid: %v", k, err)
+		}
+		cfg.recipients[k] = pk
 	}
 
 	return nil
