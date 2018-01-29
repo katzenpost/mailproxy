@@ -17,6 +17,7 @@
 package mailproxy
 
 import (
+	"bytes"
 	"errors"
 
 	"github.com/emersion/go-message"
@@ -146,7 +147,7 @@ func (p *Proxy) doReceivePeekPop(accountID string, isPop bool) (*Message, error)
 func (p *Proxy) getRecipientID(key *ecdh.PublicKey) string {
 	recipientList := p.recipients.CloneRecipients()
 	for recipient, recipientKey := range recipientList {
-		if key == recipientKey {
+		if bytes.Equal(key.Bytes(), recipientKey.Bytes()) {
 			return recipient
 		}
 	}
