@@ -186,7 +186,7 @@ func (a *Account) newDBCryptoState(forDecrypt bool) *noise.HandshakeState {
 		Random:      rand.Reader,
 		Pattern:     noise.HandshakeN,
 		Initiator:   !forDecrypt,
-		MaxMsgLen:   math.MaxUint32,
+		MaxMsgLen:   math.MaxInt32,
 	}
 	if forDecrypt {
 		cfg.StaticKeypair = noise.DHKey{
