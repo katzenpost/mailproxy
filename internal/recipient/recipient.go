@@ -103,6 +103,23 @@ func (s *Store) Get(r string) *ecdh.PublicKey {
 	return s.recipients[addr]
 }
 
+// GetByKey returns the identifier for the provided public key if any.
+func (s *Store) GetByKey(k *ecdh.PublicKey) string {
+	if k == nil {
+		return ""
+	}
+
+	s.Lock()
+	defer s.Unlock()
+
+	for id, v := range s.recipients {
+		if v.Equal(k) {
+			return id
+		}
+	}
+	return ""
+}
+
 // Set sets the ecdh.PublicKey for the provided recipient.  If an existing key
 // is present, it will be silently overwritten.
 func (s *Store) Set(r string, k *ecdh.PublicKey) error {

@@ -106,32 +106,55 @@ func (p *Proxy) preprocessOutgoing(b []byte, viaESMTP bool) ([]byte, *message.En
 	return payload, entity, isUnreliable, err
 }
 
-// ReceivePeek returns the eldest message in the given account's receive queue,
-// the sender's public key if any, and a unique identifier tag. The account's
-// receive queue is left intact.
-func (p *Proxy) ReceivePeek(accountID string) ([]byte, *ecdh.PublicKey, []byte, error) {
+// Message is the received message.
+type Message struct {
+	// Payload is the Message payload.
+	Payload   []byte
+
+	// SenderID is the Message sender's identifier set iff the sender is
+	// a known recipient.
+	SenderID  string
+
+	// SenderKey is the Message sender's public key, if any.
+	SenderKey *ecdh.PublicKey
+
+	// MessageID is the local unique identifier for the message.
+	MessageID []byte
+}
+
+// ReceivePeek returns the eldest message in the given account's receive queue.
+// The account's receive queue is left intact.
+func (p *Proxy) ReceivePeek(accountID string) (*Message, error) {
 	return p.doReceivePeekPop(accountID, false)
 }
 
 // ReceivePop removes and returns the eldest message in the given account's
-// receive queue, the sender's public key if any, and a unique identifier tag.
-func (p *Proxy) ReceivePop(accountID string) ([]byte, *ecdh.PublicKey, []byte, error) {
+// receive queue.
+func (p *Proxy) ReceivePop(accountID string) (*Message, error) {
 	return p.doReceivePeekPop(accountID, true)
 }
 
-func (p *Proxy) doReceivePeekPop(accountID string, isPop bool) ([]byte, *ecdh.PublicKey, []byte, error) {
+func (p *Proxy) doReceivePeekPop(accountID string, isPop bool) (*Message, error) {
 	acc, _, err := p.getAccount(accountID)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	defer acc.Deref()
 
 	msg, sender, msgID, err := acc.ReceivePeekPop(isPop)
-	if msg == nil && sender == nil && msgID == nil && err == nil {
+	if err != nil {
+		return nil, err
+	} else if msg == nil && sender == nil && msgID == nil {
 		// Allow the caller to easily distinguish an empty queue.
-		err = ErrNoMessages
+		return nil, ErrNoMessages
 	}
-	return msg, sender, msgID, err
+
+	return &Message{
+		Payload: msg,
+		SenderID: p.recipients.GetByKey(sender),
+		SenderKey: sender,
+		MessageID: msgID,
+	}, nil
 }
 
 func (p *Proxy) getAccount(accountID string) (*account.Account, string, error) {
