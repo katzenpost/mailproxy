@@ -106,23 +106,30 @@ func (p *Proxy) preprocessOutgoing(b []byte, viaESMTP bool) ([]byte, *message.En
 	return payload, entity, isUnreliable, err
 }
 
-// ReceivePeek returns the eldest message in the given account's receive queue,
-// the sender's public key if any, and a unique identifier tag. The account's
-// receive queue is left intact.
-func (p *Proxy) ReceivePeek(accountID string) ([]byte, *ecdh.PublicKey, []byte, error) {
+// Message is the received message
+type Message struct {
+	Msg       []byte
+	SenderID  string
+	SenderKey *ecdh.PublicKey
+	MsgID     []byte
+}
+
+// ReceivePeek returns the eldest message in the given account's receive queue.
+// The account's receive queue is left intact.
+func (p *Proxy) ReceivePeek(accountID string) (*Message, error) {
 	return p.doReceivePeekPop(accountID, false)
 }
 
 // ReceivePop removes and returns the eldest message in the given account's
-// receive queue, the sender's public key if any, and a unique identifier tag.
-func (p *Proxy) ReceivePop(accountID string) ([]byte, *ecdh.PublicKey, []byte, error) {
+// receive queue.
+func (p *Proxy) ReceivePop(accountID string) (*Message, error) {
 	return p.doReceivePeekPop(accountID, true)
 }
 
-func (p *Proxy) doReceivePeekPop(accountID string, isPop bool) ([]byte, *ecdh.PublicKey, []byte, error) {
+func (p *Proxy) doReceivePeekPop(accountID string, isPop bool) (*Message, error) {
 	acc, _, err := p.getAccount(accountID)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	defer acc.Deref()
 
@@ -131,7 +138,19 @@ func (p *Proxy) doReceivePeekPop(accountID string, isPop bool) ([]byte, *ecdh.Pu
 		// Allow the caller to easily distinguish an empty queue.
 		err = ErrNoMessages
 	}
-	return msg, sender, msgID, err
+
+	senderID := p.getRecipientID(sender)
+	return &Message{msg, senderID, sender, msgID}, err
+}
+
+func (p *Proxy) getRecipientID(key *ecdh.PublicKey) string {
+	recipientList := p.recipients.CloneRecipients()
+	for recipient, recipientKey := range recipientList {
+		if key == recipientKey {
+			return recipient
+		}
+	}
+	return ""
 }
 
 func (p *Proxy) getAccount(accountID string) (*account.Account, string, error) {
