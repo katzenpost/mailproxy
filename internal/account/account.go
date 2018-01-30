@@ -221,7 +221,7 @@ func (s *Store) newAccount(id string, cfg *config.Account, pCfg *proxy.Config) (
 	a.log = s.logBackend.GetLogger("account:" + id)
 	a.basePath = filepath.Join(s.cfg.Proxy.DataDir, id)
 	a.onRecvCh = make(chan interface{}, 1)
-	a.opCh = make(chan workerOp)
+	a.opCh = make(chan workerOp, 8) // Workaround minclient#1.
 	a.id = id
 	a.refCount = 1 // Store holds a reference.
 
