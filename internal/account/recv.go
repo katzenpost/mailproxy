@@ -606,7 +606,7 @@ func (a *Account) ReceivePeekPop(isPop bool) ([]byte, *ecdh.PublicKey, []byte, e
 	}
 
 	if isPop {
-		spoolBkt.Delete(mKey)
+		spoolBkt.DeleteBucket(mKey)
 		a.resetSpoolSeq(spoolBkt)
 		err = tx.Commit()
 	}
