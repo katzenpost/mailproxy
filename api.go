@@ -17,10 +17,13 @@
 package mailproxy
 
 import (
+	"context"
 	"errors"
+	"time"
 
 	"github.com/emersion/go-message"
 	"github.com/katzenpost/core/crypto/ecdh"
+	"github.com/katzenpost/core/epochtime"
 	"github.com/katzenpost/mailproxy/event"
 	"github.com/katzenpost/mailproxy/internal/account"
 	"github.com/katzenpost/mailproxy/internal/imf"
@@ -213,6 +216,30 @@ func (p *Proxy) IsConnected(accountID string) bool {
 	defer acc.Deref()
 
 	return acc.IsConnected()
+}
+
+// ListProviders from the authorityID
+func (p *Proxy) ListProviders(authorityID string) ([]string, error) {
+	authority, err := p.authorities.Get(authorityID)
+	if err != nil {
+		return nil, err
+	}
+
+	authClient := authority.Client()
+	epoch, _, _ := epochtime.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer cancel()
+
+	doc, _, err := authClient.Get(ctx, epoch)
+	if err != nil {
+		return nil, err
+	}
+
+	providers := make([]string, len(doc.Providers))
+	for i, descriptor := range doc.Providers {
+		providers[i] = descriptor.Name
+	}
+	return providers, nil
 }
 
 func (p *Proxy) apiEventWorker() {
