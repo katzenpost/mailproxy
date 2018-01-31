@@ -337,13 +337,17 @@ type Config struct {
 
 	NonvotingAuthority map[string]*NonvotingAuthority
 	Account            []*Account
-	Recipients         map[string]string
+	Recipients         map[string]*ecdh.PublicKey `toml:"-"`
 
-	authorities map[string]authority.Factory
-	accounts    map[string]*Account
-	recipients  map[string]*ecdh.PublicKey
-
+	authorities   map[string]authority.Factory
+	accounts      map[string]*Account
 	upstreamProxy *proxy.Config
+
+	// StrRecipients exists entirely to work around a bug in the toml library,
+	// and should not be used by anything external to this package.
+	//
+	// See: https://github.com/BurntSushi/toml/issues/170
+	StrRecipients map[string]string `toml:"Recipients"`
 }
 
 // AuthorityMap returns the identifier->authority.Factory mapping specified in
@@ -356,12 +360,6 @@ func (cfg *Config) AuthorityMap() map[string]authority.Factory {
 // Config.
 func (cfg *Config) AccountMap() map[string]*Account {
 	return cfg.accounts
-}
-
-// RecipientsMap returns the recipient->public key mapping specified in the
-// Config.
-func (cfg *Config) RecipientsMap() map[string]*ecdh.PublicKey {
-	return cfg.recipients
 }
 
 // UpstreamProxyConfig returns the configured upstream proxy, suitable for
@@ -394,11 +392,13 @@ func (cfg *Config) FixupAndValidate() error {
 	}
 	cfg.Debug.applyDefaults()
 	if cfg.Recipients == nil {
-		cfg.Recipients = make(map[string]string)
+		cfg.Recipients = make(map[string]*ecdh.PublicKey)
+	}
+	if cfg.StrRecipients == nil {
+		cfg.StrRecipients = make(map[string]string)
 	}
 	cfg.authorities = make(map[string]authority.Factory)
 	cfg.accounts = make(map[string]*Account)
-	cfg.recipients = make(map[string]*ecdh.PublicKey)
 
 	// Validate/fixup the various sections.
 	if err := cfg.Proxy.validate(); err != nil {
@@ -440,12 +440,15 @@ func (cfg *Config) FixupAndValidate() error {
 		}
 		cfg.accounts[addr] = v
 	}
-	for k, v := range cfg.Recipients {
+	for k, v := range cfg.StrRecipients {
+		if _, ok := cfg.Recipients[k]; ok {
+			return fmt.Errorf("config: Recipient '%v' defined multiple times", k)
+		}
 		pk := new(ecdh.PublicKey)
 		if err := pk.FromString(v); err != nil {
 			return fmt.Errorf("config: Recipient '%v' is invalid: %v", k, err)
 		}
-		cfg.recipients[k] = pk
+		cfg.Recipients[k] = pk
 	}
 
 	return nil
@@ -455,8 +458,12 @@ func (cfg *Config) FixupAndValidate() error {
 // returns the Config.
 func Load(b []byte, forceGenOnly bool) (*Config, error) {
 	cfg := new(Config)
-	if err := toml.Unmarshal(b, cfg); err != nil {
+	md, err := toml.Decode(string(b), cfg)
+	if err != nil {
 		return nil, err
+	}
+	if undecoded := md.Undecoded(); len(undecoded) != 0 {
+		return nil, fmt.Errorf("config: Undecoded keys in config file: %v", undecoded)
 	}
 	if err := cfg.FixupAndValidate(); err != nil {
 		return nil, err
