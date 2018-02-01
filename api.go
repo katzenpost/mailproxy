@@ -24,6 +24,7 @@ import (
 	"github.com/emersion/go-message"
 	"github.com/katzenpost/core/crypto/ecdh"
 	"github.com/katzenpost/core/epochtime"
+	"github.com/katzenpost/core/pki"
 	"github.com/katzenpost/mailproxy/internal/account"
 	"github.com/katzenpost/mailproxy/internal/imf"
 	"gopkg.in/eapache/channels.v1"
@@ -220,7 +221,7 @@ func (p *Proxy) IsConnected(accountID string) bool {
 
 // ListProviders returns a list of Provider identifiers published for the
 // current epoch by the authority identified by authorityID.
-func (p *Proxy) ListProviders(authorityID string) ([]string, error) {
+func (p *Proxy) ListProviders(authorityID string) ([]*pki.MixDescriptor, error) {
 	authority, err := p.authorities.Get(authorityID)
 	if err != nil {
 		return nil, err
@@ -236,12 +237,7 @@ func (p *Proxy) ListProviders(authorityID string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	providers := make([]string, 0, len(doc.Providers))
-	for _, v := range doc.Providers {
-		providers = append(providers, v.Name)
-	}
-	return providers, nil
+	return doc.Providers, nil
 }
 
 func (p *Proxy) initializeEventSink() {
