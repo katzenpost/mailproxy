@@ -26,7 +26,6 @@ import (
 	"github.com/katzenpost/core/log"
 	"github.com/katzenpost/core/thwack"
 	"github.com/katzenpost/core/utils"
-	"github.com/katzenpost/core/worker"
 	"github.com/katzenpost/mailproxy/config"
 	"github.com/katzenpost/mailproxy/internal/account"
 	"github.com/katzenpost/mailproxy/internal/authority"
@@ -40,7 +39,6 @@ var ErrGenerateOnly = errors.New("mailproxy: GenerateOnly set")
 
 // Proxy is a mail proxy server instance.
 type Proxy struct {
-	worker.Worker
 	cfg *config.Config
 
 	logBackend *log.Backend
@@ -118,7 +116,6 @@ func (p *Proxy) halt() {
 	}
 
 	close(p.fatalErrCh)
-	p.Halt()
 
 	p.log.Noticef("Shutdown complete.")
 	close(p.haltedCh)
@@ -127,13 +124,11 @@ func (p *Proxy) halt() {
 // New returns a new Proxy instance parameterized with the specified
 // configuration.
 func New(cfg *config.Config) (*Proxy, error) {
-	const eventChCapacity = 64
-
 	p := new(Proxy)
 	p.cfg = cfg
 	p.fatalErrCh = make(chan error)
 	p.haltedCh = make(chan interface{})
-	p.eventCh = channels.NewRingChannel(eventChCapacity)
+	p.eventCh = channels.NewInfiniteChannel()
 	g := &proxyGlue{p: p}
 
 	// Do the early initialization and bring up logging.
@@ -164,7 +159,7 @@ func New(cfg *config.Config) (*Proxy, error) {
 	}()
 
 	if !p.cfg.Debug.GenerateOnly {
-		p.Go(p.apiEventWorker)
+		p.initializeEventSink()
 	}
 
 	var err error
