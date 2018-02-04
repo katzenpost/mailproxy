@@ -150,8 +150,14 @@ func (a *Account) dbEncryptAndPut(bkt *bolt.Bucket, key, value []byte) error {
 		return bkt.Put(key, value)
 	}
 
-	hs := a.newDBCryptoState(false)
-	ciphertext, _, _ := hs.WriteMessage(nil, value)
+	hs, err := a.newDBCryptoState(false)
+	if err != nil {
+		return err
+	}
+	ciphertext, _, _, err := hs.WriteMessage(nil, value)
+	if err != nil {
+		return err
+	}
 	return bkt.Put(key, ciphertext)
 }
 
@@ -171,7 +177,10 @@ func (a *Account) dbDecrypt(ciphertext []byte) []byte {
 	if ciphertext == nil {
 		return nil
 	}
-	hs := a.newDBCryptoState(true)
+	hs, err := a.newDBCryptoState(true)
+	if err != nil {
+		return nil
+	}
 	plaintext, _, _, err := hs.ReadMessage(nil, ciphertext)
 	if err != nil {
 		panic("dbEncryptedGet: decryption failed: " + err.Error())
@@ -179,7 +188,7 @@ func (a *Account) dbDecrypt(ciphertext []byte) []byte {
 	return plaintext
 }
 
-func (a *Account) newDBCryptoState(forDecrypt bool) *noise.HandshakeState {
+func (a *Account) newDBCryptoState(forDecrypt bool) (*noise.HandshakeState, error) {
 	cs := noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashSHA256)
 	cfg := noise.Config{
 		CipherSuite: cs,
@@ -196,7 +205,6 @@ func (a *Account) newDBCryptoState(forDecrypt bool) *noise.HandshakeState {
 	} else {
 		cfg.PeerStatic = a.storageKey.PublicKey().Bytes()
 	}
-
 	return noise.NewHandshakeState(cfg)
 }
 
