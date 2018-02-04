@@ -448,9 +448,76 @@ func (a *Account) sendNextBlock() error {
 	return err
 }
 
+func (a *Account) GetKaetzchenServices() ([]string, error) {
+	doc, _, err := a.authority.impl.Get(ctx, epoch)
+	if err != nil {
+		return nil, err
+	}
+	descriptor, err := doc.GetProvider(provider)
+	if err != nil {
+		return nil, err
+	}
+	services := []string{}
+	for service := range descriptor.Kaetzchen {
+		services = append(services, service)
+	}
+	return services, nil
+}
+
+func (a *Account) GetKaetzchenServiceParameters(provider, service string) (map[string]interface{}, error) {
+	doc, _, err := a.authority.impl.Get(ctx, epoch)
+	if err != nil {
+		return nil, err
+	}
+	descriptor, err := doc.GetProvider(provider)
+	if err != nil {
+		return nil, err
+	}
+	return descriptor.Kaetzchen[service], nil
+}
+
+// SendKaetzchenQuery sends a Kaetzchen query
+func (a *Account) SendKaetzchenQuery(endpoint string, payload []byte, expectReply bool) error {
+	a.Lock()
+	defer a.Unlock()
+	if a.expectingKaetzchenReply {
+		return errors.New("failure of SendKaetzchenQuery: only one query/reply allowed at a time.")
+	}
+	if expectReply {
+		var surbID [sConstants.SURBIDLength]byte
+		_, err := rand.Reader.Read(surbID[:])
+		if err != nil {
+			return err
+		}
+		surbKeys, rtt, err := a.client.SendCiphertext(recipient, provider, surbID, payload)
+		if err != nil {
+			return err
+		}
+		a.scheduleRetransmitKaetzchen(rtt, payload)
+		a.expectKaetzchenReply = true
+	} else {
+		// XXX
+	}
+}
+
+func (a *Account) scheduleRetransmitKaetzchen(rtt time.Duration, payload []byte) {
+	// XXX
+}
+
+func (a *Account) onKaetzchenReply(surbID *[sConstants.SURBIDLength]byte, payload []byte) {
+	a.expectKaetzchenReply = false
+}
+
 func (a *Account) onSURB(surbID *[sConstants.SURBIDLength]byte, payload []byte) error {
 	idStr := fmt.Sprintf("[%v]", hex.EncodeToString(surbID[:]))
 	a.log.Debugf("onSURB: %v.", idStr)
+
+	a.RLock()
+	defer a.RUnlock()
+	if a.expectKaetzchenReply {
+		a.onKaetzchenReply(surbID, payload)
+		return nil
+	}
 
 	// WARNING: Returning non-nil from this will kill the connection and
 	// roll back the transaction.
