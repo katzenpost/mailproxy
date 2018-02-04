@@ -64,7 +64,8 @@ type Account struct {
 	lastFragsSweep uint64
 	lastSendGC     uint64
 
-	isConnected bool
+	isConnected          bool
+	expectKaetzchenReply bool
 }
 
 // Deref decrements the reference count of the Account.  If the reference count
