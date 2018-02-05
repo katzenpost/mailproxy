@@ -61,6 +61,7 @@ import (
 	"github.com/katzenpost/core/constants"
 	"github.com/katzenpost/core/crypto/ecdh"
 	"github.com/katzenpost/core/crypto/rand"
+	"github.com/katzenpost/core/pki"
 	"github.com/katzenpost/core/queue"
 	"github.com/katzenpost/core/sphinx"
 	sConstants "github.com/katzenpost/core/sphinx/constants"
@@ -90,6 +91,9 @@ const (
 	sentBlocksKey  = "sentBlocks"
 	blocksBucket   = "blocks"
 	surbETAsBucket = "surbETAs"
+
+	sendReceiveDrainWait  = 1 * time.Minute
+	sendMinimumOnlineTime = 1 * time.Minute
 )
 
 var (
@@ -190,6 +194,17 @@ func (a *Account) EnqueueMessage(recipient *Recipient, msg []byte, isUnreliable 
 	return nil
 }
 
+type sendBlockCtx struct {
+	msgID        [block.MessageIDLength]byte
+	surbID       [sConstants.SURBIDLength]byte
+	payload      []byte
+	user         string
+	provider     string
+	blockID      uint64
+	sentBlocks   uint64
+	isUnreliable bool
+}
+
 func (a *Account) sendNextBlock() error {
 	// Unlike everything else that uses a single transaction to accomplish
 	// various operations, this uses two, because the code will deadlock
@@ -199,6 +214,110 @@ func (a *Account) sendNextBlock() error {
 	// While this isn't great, the worst that can happen is one missed (or
 	// spurious) retransmission, both of which are mostly harmless.
 
+	doc := a.client.CurrentDocument()
+	if doc == nil {
+		return errNoDocument
+	}
+	now := a.nowUnix()
+
+	var blk *sendBlockCtx
+	if err := a.db.View(func(tx *bolt.Tx) error {
+		sendBkt := tx.Bucket([]byte(sendBucket))
+
+		var err error
+
+		// TODO: Check to see if there is a more urgent message like a
+		// Kaetzchen request to send before searching the standard message
+		// queue for a send candidate.
+
+		blk, err = a.nextSendMessageBlock(sendBkt, doc, now)
+		return err
+	}); err != nil {
+		return err
+	} else if blk == nil {
+		// Nothing in the queue found.
+		return nil
+	}
+
+	// Actually dispatch the packet.  The `SendCiphertext` call is where the
+	// deadlock can happen in minclient.
+	msgIDStr := hex.EncodeToString(blk.msgID[:])
+	destStr := blk.user + "@" + blk.provider
+	var surbKey []byte
+	var eta uint64
+	var err error
+	if !blk.isUnreliable {
+		a.log.Debugf("Message [%v](->%v): Sending block %v.", msgIDStr, destStr, blk.blockID)
+
+		var deltaT time.Duration
+		surbKey, deltaT, err = a.client.SendCiphertext(blk.user, blk.provider, &blk.surbID, blk.payload)
+		if err != nil {
+			return err
+		}
+		eta = a.nowUnix() + uint64(deltaT.Seconds())
+	} else {
+		a.log.Debugf("Message [%v](->%v, Unreliable): Sending block %v.", msgIDStr, destStr, blk.blockID)
+		if err = a.client.SendUnreliableCiphertext(blk.user, blk.provider, blk.payload); err != nil {
+			return nil
+		}
+	}
+
+	if err = a.db.Update(func(tx *bolt.Tx) error {
+		sendBkt := tx.Bucket([]byte(sendBucket))
+
+		if !blk.isUnreliable {
+			// Save the SURB-ACK metadata.
+			surbsBkt := sendBkt.Bucket([]byte(surbsBucket))
+			surbBkt, err := surbsBkt.CreateBucket(blk.surbID[:])
+			if err != nil {
+				// This should be impossible, because the SURB ID was unique
+				// right after it was generated, and this function won't be
+				// simultaniously called ever.
+				a.log.Errorf("BUG: Failed to create SURB bucket [%v]: %v", hex.EncodeToString(blk.surbID[:]), err)
+				return err
+			}
+			surbBkt.Put([]byte(messageIDKey), blk.msgID[:])
+			surbBkt.Put([]byte(sprpKey), surbKey)
+			surbBkt.Put([]byte(blockIDKey), uint64ToBytes(blk.blockID))
+			surbBkt.Put([]byte(etaKey), uint64ToBytes(eta))
+		}
+
+		// Update the message in-flight status.
+		spoolBkt := sendBkt.Bucket([]byte(spoolBucket))
+		_, msgBkt := sendSpoolEntryByID(spoolBkt, &blk.msgID)
+		if msgBkt == nil {
+			// The message completed between the schedule and update.
+			// Roll back the transaction and return no error, since
+			// this is not a bug, and "only" a spurious retransmission.
+			return errEntryGone
+		}
+		msgBkt.Put([]byte(sentBlocksKey), uint64ToBytes(blk.sentBlocks+1))
+		if !blk.isUnreliable {
+			etaBkt := msgBkt.Bucket([]byte(surbETAsBucket))
+			etaBkt.Put(uint64ToBytes(blk.blockID), uint64ToBytes(eta))
+			a.log.Debugf("Message [%v](->%v): SURB stored [%v](Block: %v ETA: %v)", msgIDStr, destStr, hex.EncodeToString(blk.surbID[:]), blk.blockID, eta)
+		} else {
+			// Treat sending a block of an unreliable message as if it
+			// immediately received a synthetic ACK.
+			ack := &surbACK{
+				blockID: blk.blockID,
+				eta:     eta,
+			}
+			copy(ack.messageID[:], blk.msgID[:])
+			a.onACK("<synthetic>", sendBkt, ack, true)
+		}
+
+		return nil
+	}); err == errEntryGone {
+		// Suppress errors if the spool entry happened to disapear while
+		// sending a packet.
+		err = nil
+	}
+
+	return err
+}
+
+func (a *Account) nextSendMessageBlock(sendBkt *bolt.Bucket, doc *pki.Document, now uint64) (*sendBlockCtx, error) {
 	// Find the best available block to transmit.  This is currently done
 	// by examining each message in sequence (FIFO), and:
 	//
@@ -215,237 +334,137 @@ func (a *Account) sendNextBlock() error {
 	// in the queue, instead of transmitting each message fully in-order,
 	// but that's quite a bit of complexity.
 
-	const (
-		receiveDrainWait  = 1 * time.Minute
-		minimumOnlineTime = 1 * time.Minute
-	)
+	spoolBkt := sendBkt.Bucket([]byte(spoolBucket))
 
-	doc := a.client.CurrentDocument()
-	if doc == nil {
-		return errNoDocument
-	}
-
-	now := a.nowUnix()
-	var user, provider string
-	var msgID [block.MessageIDLength]byte
-	var block []byte
-	var blockID uint64
-	var surbID [sConstants.SURBIDLength]byte
-	var isUnreliable bool
-	var sentBlocks uint64
-	if err := a.db.View(func(tx *bolt.Tx) error {
-		sendBkt := tx.Bucket([]byte(sendBucket))
-		spoolBkt := sendBkt.Bucket([]byte(spoolBucket))
-
-		// Iterate in ascending queue order (Oldest message).
-		cur := spoolBkt.Cursor()
-		for k, v := cur.First(); k != nil; k, v = cur.Next() {
-			if v != nil {
-				continue
-			}
-			msgBkt := spoolBkt.Bucket(k)
-
-			// Retreive the initial send metadata.
-			var totalBlocks uint64
-			if b := msgBkt.Get([]byte(totalBlocksKey)); len(b) == 8 {
-				totalBlocks = binary.BigEndian.Uint64(b[:])
-			}
-			if b := msgBkt.Get([]byte(sentBlocksKey)); len(b) == 8 {
-				sentBlocks = binary.BigEndian.Uint64(b[:])
-			}
-			if sentBlocks < totalBlocks {
-				// There is fresh data available to send, so send fresh
-				// data, under the assumption that losses are relatively
-				// infrequent.
-				blockID = sentBlocks
-			} else {
-				// All blocks were sent at least once, check to see
-				// if a retransmission should happen.
-				var waitTill uint64
-
-				// We only need to make the decision based off the block
-				// that we expect to be ACKed at the earliest time, for
-				// reasons that should be obvious.
-				//
-				// TODO/performance: The PQ could be cached instead of
-				// rebuilding it each send cycle, but having multiple
-				// views of the same data is messy.
-				q := buildETAQueue(msgBkt)
-				if e := q.Peek(); e != nil {
-					waitTill = e.Priority
-					blockID = e.Value.(uint64)
-				} else {
-					// This never happen, again the GC will fix this.
-					continue
-				}
-
-				// Check the ACK travel time to see if it's obviously
-				// still in-flight.
-				if waitTill+uint64(a.s.cfg.Debug.RetransmitSlack) > now {
-					continue
-				}
-
-				// Even if it's past the retransmission time, there
-				// is a chance that the ACK is sitting in the receive
-				// queue waiting to be downloaded.  Try to be somewhat
-				// clever about this.
-
-				// If the server told us that the receive queue was
-				// empty relatively recently, then we probably should
-				// retransmit.
-				if time.Since(a.emptyAt) > receiveDrainWait {
-					// Otherwise, if we have not been online for a
-					// "reasonable" amount of time, delay the retransmit
-					// to hopefully get the receive queue to settle.
-					if time.Since(a.onlineAt) < minimumOnlineTime {
-						continue
-					}
-				}
-			}
-
-			// Skip further retransmissions for messages that will soon be
-			// bounced.
-			if b := msgBkt.Get([]byte(bounceAtKey)); len(b) == 8 {
-				bounceAt := binary.BigEndian.Uint64(b[:])
-
-				// TODO: Check to see if the message is still making
-				// forward progress, by examining when it last got an
-				// ACK, and relax the bounce time.
-
-				if bounceAt < now {
-					continue
-				}
-			}
-
-			// Copy out the block and relevant meta-data.
-			provider = string(msgBkt.Get([]byte(providerKey)))
-			if _, err := doc.GetProvider(provider); err != nil {
-				// The current view of the network does not contain this
-				// message's Provider, so this will just fail in path
-				// selection.
-				//
-				// Note: This is inherently race prone, because the document
-				// is not refreshed at all through the decision making
-				// process, but the failure is going to be limited to one
-				// send iteration.
-				continue
-			}
-			blocksBkt := msgBkt.Bucket([]byte(blocksBucket))
-			if b := blocksBkt.Get(uint64ToBytes(blockID)); b != nil {
-				block = make([]byte, 0, len(b))
-				block = append(block, b...)
-			} else {
-				// This should never happen, but the GC cycle will deal with
-				// this.
-				continue
-			}
-			user = string(msgBkt.Get([]byte(userKey)))
-			copy(msgID[:], msgBkt.Get([]byte(messageIDKey)))
-			if b := msgBkt.Get([]byte(unreliableKey)); len(b) == 1 && b[0] == 0x01 {
-				isUnreliable = true
-			}
-
-			if !isUnreliable {
-				// Now that we selected a block, generate a SURB ID.  This is
-				// done mid-transaction so that it is possible to ensure that
-				// the generated ID is not already in use.
-				surbsBkt := sendBkt.Bucket([]byte(surbsBucket))
-				for {
-					if _, err := io.ReadFull(rand.Reader, surbID[:]); err != nil {
-						return err
-					}
-					if surbBkt := surbsBkt.Bucket(surbID[:]); surbBkt == nil {
-						return nil
-					}
-				}
-			}
+	// Iterate in ascending queue order (Oldest message).
+	var blk sendBlockCtx
+	cur := spoolBkt.Cursor()
+	for k, v := cur.First(); k != nil; k, v = cur.Next() {
+		if v != nil {
+			continue
 		}
-		return nil
-	}); err != nil {
-		return err
-	} else if block == nil {
-		// Nothing in the queue found.
-		return nil
-	}
+		msgBkt := spoolBkt.Bucket(k)
 
-	// Actually dispatch the packet.  The `SendCiphertext` call is where the
-	// deadlock can happen in minclient.
-	msgIDStr := hex.EncodeToString(msgID[:])
-	var surbKey []byte
-	var eta uint64
-	var err error
-	if !isUnreliable {
-		a.log.Debugf("Message [%v](->%v): Sending block %v.", msgIDStr, user+"@"+provider, blockID)
-
-		var deltaT time.Duration
-		surbKey, deltaT, err = a.client.SendCiphertext(user, provider, &surbID, block)
-		if err != nil {
-			return err
+		// Retreive the initial send metadata.
+		var totalBlocks uint64
+		if b := msgBkt.Get([]byte(totalBlocksKey)); len(b) == 8 {
+			totalBlocks = binary.BigEndian.Uint64(b[:])
 		}
-		eta = a.nowUnix() + uint64(deltaT.Seconds())
-	} else {
-		a.log.Debugf("Message [%v](->%v, Unreliable): Sending block %v.", msgIDStr, user+"@"+provider, blockID)
-		if err = a.client.SendUnreliableCiphertext(user, provider, block); err != nil {
-			return nil
+		if b := msgBkt.Get([]byte(sentBlocksKey)); len(b) == 8 {
+			blk.sentBlocks = binary.BigEndian.Uint64(b[:])
 		}
-	}
-
-	if err = a.db.Update(func(tx *bolt.Tx) error {
-		sendBkt := tx.Bucket([]byte(sendBucket))
-
-		if !isUnreliable {
-			// Save the SURB-ACK metadata.
-			surbsBkt := sendBkt.Bucket([]byte(surbsBucket))
-			surbBkt, err := surbsBkt.CreateBucket(surbID[:])
-			if err != nil {
-				// This should be impossible, because the SURB ID was unique
-				// right after it was generated, and this function won't be
-				// simultaniously called ever.
-				a.log.Errorf("BUG: Failed to create SURB bucket [%v]: %v", hex.EncodeToString(surbID[:]), err)
-				return err
-			}
-			surbBkt.Put([]byte(messageIDKey), msgID[:])
-			surbBkt.Put([]byte(sprpKey), surbKey)
-			surbBkt.Put([]byte(blockIDKey), uint64ToBytes(blockID))
-			surbBkt.Put([]byte(etaKey), uint64ToBytes(eta))
-		}
-
-		// Update the message in-flight status.
-		spoolBkt := sendBkt.Bucket([]byte(spoolBucket))
-		_, msgBkt := sendSpoolEntryByID(spoolBkt, &msgID)
-		if msgBkt == nil {
-			// The message completed between the schedule and update.
-			// Roll back the transaction and return no error, since
-			// this is not a bug, and "only" a spurious retransmission.
-			return errEntryGone
-		}
-		msgBkt.Put([]byte(sentBlocksKey), uint64ToBytes(sentBlocks+1))
-		if !isUnreliable {
-			etaBkt := msgBkt.Bucket([]byte(surbETAsBucket))
-			etaBkt.Put(uint64ToBytes(blockID), uint64ToBytes(eta))
-		}
-
-		if !isUnreliable {
-			a.log.Debugf("Message [%v](->%v): SURB stored [%v](Block: %v ETA: %v)", msgIDStr, user+"@"+provider, hex.EncodeToString(surbID[:]), blockID, eta)
+		if blk.sentBlocks < totalBlocks {
+			// There is fresh data available to send, so send fresh
+			// data, under the assumption that losses are relatively
+			// infrequent.
+			blk.blockID = blk.sentBlocks
 		} else {
-			// Treat sending a block of an unreliable message as if it
-			// immediately received a synthetic ACK.
-			ack := &surbACK{
-				blockID: blockID,
-				eta:     eta,
+			// All blocks were sent at least once, check to see
+			// if a retransmission should happen.
+			var waitTill uint64
+
+			// We only need to make the decision based off the block
+			// that we expect to be ACKed at the earliest time, for
+			// reasons that should be obvious.
+			//
+			// TODO/performance: The PQ could be cached instead of
+			// rebuilding it each send cycle, but having multiple
+			// views of the same data is messy.
+			q := buildETAQueue(msgBkt)
+			if e := q.Peek(); e != nil {
+				waitTill = e.Priority
+				blk.blockID = e.Value.(uint64)
+			} else {
+				// This never happen, again the GC will fix this.
+				continue
 			}
-			copy(ack.messageID[:], msgID[:])
-			a.onACK("<synthetic>", sendBkt, ack, true)
+
+			// Check the ACK travel time to see if it's obviously
+			// still in-flight.
+			if waitTill+uint64(a.s.cfg.Debug.RetransmitSlack) > now {
+				continue
+			}
+
+			// Even if it's past the retransmission time, there
+			// is a chance that the ACK is sitting in the receive
+			// queue waiting to be downloaded.  Try to be somewhat
+			// clever about this.
+
+			// If the server told us that the receive queue was
+			// empty relatively recently, then we probably should
+			// retransmit.
+			if time.Since(a.emptyAt) > sendReceiveDrainWait {
+				// Otherwise, if we have not been online for a
+				// "reasonable" amount of time, delay the retransmit
+				// to hopefully get the receive queue to settle.
+				if time.Since(a.onlineAt) < sendMinimumOnlineTime {
+					continue
+				}
+			}
 		}
 
-		return nil
-	}); err == errEntryGone {
-		// Suppress errors if the spool entry happened to disapear while
-		// sending a packet.
-		err = nil
+		// Skip further retransmissions for messages that will soon be
+		// bounced.
+		if b := msgBkt.Get([]byte(bounceAtKey)); len(b) == 8 {
+			bounceAt := binary.BigEndian.Uint64(b[:])
+
+			// TODO: Check to see if the message is still making
+			// forward progress, by examining when it last got an
+			// ACK, and relax the bounce time.
+
+			if bounceAt < now {
+				continue
+			}
+		}
+
+		// Copy out the block and relevant meta-data.
+		blk.provider = string(msgBkt.Get([]byte(providerKey)))
+		if _, err := doc.GetProvider(blk.provider); err != nil {
+			// The current view of the network does not contain this
+			// message's Provider, so this will just fail in path
+			// selection.
+			//
+			// Note: This is inherently race prone, because the document
+			// is not refreshed at all through the decision making
+			// process, but the failure is going to be limited to one
+			// send iteration.
+			continue
+		}
+		blocksBkt := msgBkt.Bucket([]byte(blocksBucket))
+		if b := blocksBkt.Get(uint64ToBytes(blk.blockID)); b != nil {
+			blk.payload = make([]byte, 0, len(b))
+			blk.payload = append(blk.payload, b...)
+		} else {
+			// This should never happen, but the GC cycle will deal with
+			// this.
+			continue
+		}
+		blk.user = string(msgBkt.Get([]byte(userKey)))
+		copy(blk.msgID[:], msgBkt.Get([]byte(messageIDKey)))
+		if b := msgBkt.Get([]byte(unreliableKey)); len(b) == 1 && b[0] == 0x01 {
+			blk.isUnreliable = true
+		}
+
+		if !blk.isUnreliable {
+			// Now that we selected a block, generate a SURB ID.  This is
+			// done mid-transaction so that it is possible to ensure that
+			// the generated ID is not already in use.
+			surbsBkt := sendBkt.Bucket([]byte(surbsBucket))
+			for {
+				if _, err := io.ReadFull(rand.Reader, blk.surbID[:]); err != nil {
+					return nil, err
+				}
+				if surbBkt := surbsBkt.Bucket(blk.surbID[:]); surbBkt == nil {
+					break
+				}
+			}
+		}
+
+		// A candidate block has been found.
+		return &blk, nil
 	}
 
-	return err
+	return nil, nil
 }
 
 func (a *Account) onSURB(surbID *[sConstants.SURBIDLength]byte, payload []byte) error {
