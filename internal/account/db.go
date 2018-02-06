@@ -94,6 +94,9 @@ func (a *Account) initDatabase() error {
 		if _, err := sendBkt.CreateBucketIfNotExists([]byte(spoolBucket)); err != nil {
 			return err
 		}
+		if _, err := sendBkt.CreateBucketIfNotExists([]byte(urgentSpoolBucket)); err != nil {
+			return err
+		}
 
 		if b := bkt.Get([]byte(versionKey)); b != nil {
 			if len(b) != 1 || b[0] != 0 {

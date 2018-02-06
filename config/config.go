@@ -46,6 +46,7 @@ const (
 	defaultLogLevel            = "NOTICE"
 	defaultManagementSocket    = "management_sock"
 	defaultBounceQueueLifetime = 432000 // 5 days.
+	defaultUrgentQueueLifetime = 3600   // 1 hour.
 	defaultPollingInterval     = 30     // 30 seconds.
 	defaultRetransmitSlack     = 300    // 5 minutes.
 )
@@ -139,6 +140,10 @@ type Debug struct {
 	// proxy will give up on sending a particular e-mail.
 	BounceQueueLifetime int
 
+	// UrgentQueueLifetime is the minimum time in seconds till the mail
+	// proxy will give up on sending urgent (Kaetzchen) requests.
+	UrgentQueueLifetime int
+
 	// PollingInterval is the interval in seconds that will be used to
 	// poll the receive queue.  By default this is 30 seconds.  Reducing
 	// the value too far WILL result in uneccesary Provider load, and
@@ -168,6 +173,9 @@ func (dCfg *Debug) applyDefaults() {
 	}
 	if dCfg.BounceQueueLifetime <= 0 {
 		dCfg.BounceQueueLifetime = defaultBounceQueueLifetime
+	}
+	if dCfg.UrgentQueueLifetime <= 0 {
+		dCfg.UrgentQueueLifetime = defaultUrgentQueueLifetime
 	}
 	if dCfg.PollingInterval <= 0 {
 		dCfg.PollingInterval = defaultPollingInterval

@@ -64,3 +64,28 @@ type MessageReceivedEvent struct {
 func (e *MessageReceivedEvent) String() string {
 	return fmt.Sprintf("MessageReceived[%v]: %v %v", e.AccountID, e.SenderKey, hex.EncodeToString(e.MessageID))
 }
+
+// KaetzchenReplyEvent is the event sent when a Kaetzchen request completes.
+type KaetzchenReplyEvent struct {
+	// AccountID is the account identifier for the account associated with the
+	// event.
+	AccountID string
+
+	// MessageID is the unique identifier for the request associated with the
+	// reply.
+	MessageID []byte
+
+	// Payload is the reply payload if any.
+	Payload []byte
+
+	// Err is the error encountered when servicing the request if any.
+	Err error
+}
+
+// String returns a string representation of the KaetzchenReplyEvent.
+func (e *KaetzchenReplyEvent) String() string {
+	if e.Err != nil {
+		return fmt.Sprintf("KaetzchenReply[%v]: %v failed: %v", e.AccountID, hex.EncodeToString(e.MessageID), e.Err)
+	}
+	return fmt.Sprintf("KaetzchenReply[%v]: %v (%v bytes)", e.AccountID, hex.EncodeToString(e.MessageID), len(e.Payload))
+}

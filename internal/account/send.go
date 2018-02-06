@@ -28,6 +28,7 @@ package account
 //       - "messageID" - The spool entry for which this belongs to.
 //       - "blockID"   - The block ID corresponding to the SURB.
 //       - "eta"       - The SURB ETA unix time (uint64).
+//       - "type"      - The expected type of the SURB (uint8).
 //   - "spool" - The outgoing message queue (SMTP spool).
 //     - `seqNR` - A message (BoltDB's per-bucket sequence number).
 //       - "messageID"   - The message ID of the message.
@@ -43,6 +44,14 @@ package account
 //         - blockID - A queued block. (uint64 Block ID keys).
 //       - "surbETAs"    - The retransmit unix times.
 //         - blockID - A estimated ACK arrival time (uint64).
+//   - "urgentSpool" - The outgoing urgent message queue (Kaetzchen spool).
+//     - `seqNR` - A message (BoltDB's per-bucket sequence number).
+//       - "messageID"   - The message ID of the message.
+//       - "user"        - The recipient service ID (NOT endpoint).
+//       - "provider"    - The recipient's provider.
+//       - "bounceAt"    - The earliest bounce unix time (uint64).
+//       - "plaintext"   - The message plaintext (Optionally encrypted).
+//       - "unreliable"  - Denotes that no SURBs should be sent ('0x01').
 //
 // Note: Unless stated otherwise, all integer values are in network byte
 // order.
@@ -66,6 +75,7 @@ import (
 	"github.com/katzenpost/core/sphinx"
 	sConstants "github.com/katzenpost/core/sphinx/constants"
 	"github.com/katzenpost/core/utils"
+	"github.com/katzenpost/mailproxy/event"
 	"github.com/katzenpost/mailproxy/internal/imf"
 	"github.com/katzenpost/minclient/block"
 )
@@ -79,6 +89,7 @@ const (
 	messageIDKey = "messageID"
 	blockIDKey   = "blockID"
 	etaKey       = "eta"
+	typeKey      = "type"
 
 	// spoolBucket - also a subkey of "receive".
 	userKey       = "user"
@@ -92,13 +103,23 @@ const (
 	blocksBucket   = "blocks"
 	surbETAsBucket = "surbETAs"
 
+	urgentSpoolBucket = "urgentSpool"
+
 	sendReceiveDrainWait  = 1 * time.Minute
 	sendMinimumOnlineTime = 1 * time.Minute
+
+	surbTypeACK       = 0
+	surbTypeKaetzchen = 1
 )
 
 var (
 	errEntryGone  = errors.New("spool entry disapeared while sending")
 	errNoDocument = errors.New("no directory information available")
+	errNoProvider = errors.New("no such provider")
+
+	errSendTimeout  = errors.New("timed out attempting to send")
+	errReplyTimeout = errors.New("timed out waiting for reply")
+	errInvalidReply = errors.New("reply body was malformed")
 )
 
 // Recipient is a outgoing recipient.
@@ -109,30 +130,35 @@ type Recipient struct {
 	PublicKey *ecdh.PublicKey
 }
 
-type surbACK struct {
+type surbCtx struct {
 	messageID [block.MessageIDLength]byte
 	blockID   uint64
 	eta       uint64
+	surbType  byte
 }
 
-func (sa *surbACK) fromBucket(bkt *bolt.Bucket) error {
+func (sc *surbCtx) fromBucket(bkt *bolt.Bucket) error {
 	msgID := bkt.Get([]byte(messageIDKey))
-	if len(msgID) != len(sa.messageID) {
+	if len(msgID) != len(sc.messageID) {
 		return fmt.Errorf("invalid messageID length: %v", len(msgID))
 	}
-	copy(sa.messageID[:], msgID)
+	copy(sc.messageID[:], msgID)
 
 	blockID := bkt.Get([]byte(blockIDKey))
 	if len(blockID) != 8 {
 		return fmt.Errorf("invalid blockID length: %v", len(blockID))
 	}
-	sa.blockID = binary.BigEndian.Uint64(blockID[:])
+	sc.blockID = binary.BigEndian.Uint64(blockID[:])
 
 	eta := bkt.Get([]byte(etaKey))
 	if len(eta) != 8 {
 		return fmt.Errorf("invalid eta length: %v", len(blockID))
 	}
-	sa.eta = binary.BigEndian.Uint64(eta[:])
+	sc.eta = binary.BigEndian.Uint64(eta[:])
+
+	if b := bkt.Get([]byte(typeKey)); len(b) == 1 {
+		sc.surbType = b[0]
+	}
 
 	return nil
 }
@@ -194,6 +220,79 @@ func (a *Account) EnqueueMessage(recipient *Recipient, msg []byte, isUnreliable 
 	return nil
 }
 
+// EnqueueKaetzchenRequest enqueues a Katzchen request for transmission.
+//
+// Note: Kaetzchen requests are treated as "urgent" and will skip to the head
+// of the transmit queue.  Additonally, the requests are considered one-shot
+// and not retransmitted.
+func (a *Account) EnqueueKaetzchenRequest(recipient *Recipient, msg []byte, isUnreliable bool) ([]byte, error) {
+	doc := a.client.CurrentDocument()
+	if doc == nil {
+		return nil, errNoDocument
+	}
+
+	// Check that the recipient is a service with a valid endpoint.  This
+	// is re-checked when scheduling the message for transmission.
+	pDesc, err := doc.GetProvider(recipient.Provider)
+	if err != nil {
+		return nil, err
+	}
+
+	// Fixup the user (Kaetzchen service ID) to endpoint.
+	if params, ok := pDesc.Kaetzchen[recipient.User]; ok {
+		if _, ok = params["endpoint"].(string); !ok {
+			return nil, fmt.Errorf("invalid endpoint in descriptor")
+		}
+	} else {
+		return nil, fmt.Errorf("no such service: '%v'", recipient.User)
+	}
+
+	// Generate a distinct message ID for this message.
+	var msgID [block.MessageIDLength]byte
+	if _, err := io.ReadFull(rand.Reader, msgID[:]); err != nil {
+		return nil, err
+	}
+
+	// Ensure the request message is under the maximum for a single
+	// packet, and pad out the message so that it is the correct size.
+	if len(msg) > constants.UserForwardPayloadLength {
+		return nil, fmt.Errorf("invalid message size: %v", len(msg))
+	}
+	payload := make([]byte, constants.UserForwardPayloadLength)
+	copy(payload, msg)
+
+	// Append to the urgent send queue.
+	if err := a.db.Update(func(tx *bolt.Tx) error {
+		sendBkt := tx.Bucket([]byte(sendBucket))
+		urgentSpoolBkt := sendBkt.Bucket([]byte(urgentSpoolBucket))
+
+		// Create the spool entry bucket.
+		seq, _ := urgentSpoolBkt.NextSequence()
+		msgBkt, err := urgentSpoolBkt.CreateBucketIfNotExists(uint64ToBytes(seq))
+		if err != nil {
+			return err
+		}
+
+		// Insert the metadata and payload.
+		ts := uint64ToBytes(a.nowUnix() + uint64(a.s.cfg.Debug.UrgentQueueLifetime))
+		msgBkt.Put([]byte(messageIDKey), msgID[:])
+		msgBkt.Put([]byte(userKey), []byte(recipient.User))
+		msgBkt.Put([]byte(providerKey), []byte(recipient.Provider))
+		msgBkt.Put([]byte(bounceAtKey), ts)
+		a.dbEncryptAndPut(msgBkt, []byte(plaintextKey), payload)
+		if isUnreliable {
+			msgBkt.Put([]byte(unreliableKey), []byte{0x01})
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	a.log.Debugf("Message [%v](->%v): Enqueued Kaetzchen Request.", hex.EncodeToString(msgID[:]), recipient.ID)
+
+	return msgID[:], nil
+}
+
 type sendBlockCtx struct {
 	msgID        [block.MessageIDLength]byte
 	surbID       [sConstants.SURBIDLength]byte
@@ -203,6 +302,7 @@ type sendBlockCtx struct {
 	blockID      uint64
 	sentBlocks   uint64
 	isUnreliable bool
+	isUrgent     bool
 }
 
 func (a *Account) sendNextBlock() error {
@@ -221,15 +321,16 @@ func (a *Account) sendNextBlock() error {
 	now := a.nowUnix()
 
 	var blk *sendBlockCtx
-	if err := a.db.View(func(tx *bolt.Tx) error {
+	var err error
+	if err = a.db.View(func(tx *bolt.Tx) error {
 		sendBkt := tx.Bucket([]byte(sendBucket))
+		if blk, err = a.nextSendUrgentBlock(sendBkt, doc, now); err != nil {
+			return err
+		} else if blk != nil {
+			return nil
+		}
 
-		var err error
-
-		// TODO: Check to see if there is a more urgent message like a
-		// Kaetzchen request to send before searching the standard message
-		// queue for a send candidate.
-
+		// No urgent messages to send, check the normal message spool.
 		blk, err = a.nextSendMessageBlock(sendBkt, doc, now)
 		return err
 	}); err != nil {
@@ -245,7 +346,6 @@ func (a *Account) sendNextBlock() error {
 	destStr := blk.user + "@" + blk.provider
 	var surbKey []byte
 	var eta uint64
-	var err error
 	if !blk.isUnreliable {
 		a.log.Debugf("Message [%v](->%v): Sending block %v.", msgIDStr, destStr, blk.blockID)
 
@@ -280,6 +380,23 @@ func (a *Account) sendNextBlock() error {
 			surbBkt.Put([]byte(sprpKey), surbKey)
 			surbBkt.Put([]byte(blockIDKey), uint64ToBytes(blk.blockID))
 			surbBkt.Put([]byte(etaKey), uint64ToBytes(eta))
+			if blk.isUrgent {
+				surbBkt.Put([]byte(typeKey), []byte{surbTypeKaetzchen})
+			} else {
+				surbBkt.Put([]byte(typeKey), []byte{surbTypeACK})
+			}
+		}
+
+		// Urgent messages require different handling by virtue of not
+		// being retransmitted or persisted.
+		if blk.isUrgent {
+			urgentSpoolBkt := sendBkt.Bucket([]byte(urgentSpoolBucket))
+			msgSeq, msgBkt := sendSpoolEntryByID(urgentSpoolBkt, &blk.msgID)
+			if msgBkt != nil {
+				urgentSpoolBkt.DeleteBucket(msgSeq)
+				a.resetSpoolSeq(urgentSpoolBkt)
+			}
+			return nil
 		}
 
 		// Update the message in-flight status.
@@ -299,7 +416,7 @@ func (a *Account) sendNextBlock() error {
 		} else {
 			// Treat sending a block of an unreliable message as if it
 			// immediately received a synthetic ACK.
-			ack := &surbACK{
+			ack := &surbCtx{
 				blockID: blk.blockID,
 				eta:     eta,
 			}
@@ -443,21 +560,68 @@ func (a *Account) nextSendMessageBlock(sendBkt *bolt.Bucket, doc *pki.Document, 
 		copy(blk.msgID[:], msgBkt.Get([]byte(messageIDKey)))
 		if b := msgBkt.Get([]byte(unreliableKey)); len(b) == 1 && b[0] == 0x01 {
 			blk.isUnreliable = true
+		} else if _, err := io.ReadFull(rand.Reader, blk.surbID[:]); err != nil {
+			return nil, err
 		}
 
-		if !blk.isUnreliable {
-			// Now that we selected a block, generate a SURB ID.  This is
-			// done mid-transaction so that it is possible to ensure that
-			// the generated ID is not already in use.
-			surbsBkt := sendBkt.Bucket([]byte(surbsBucket))
-			for {
-				if _, err := io.ReadFull(rand.Reader, blk.surbID[:]); err != nil {
-					return nil, err
-				}
-				if surbBkt := surbsBkt.Bucket(blk.surbID[:]); surbBkt == nil {
-					break
-				}
+		// A candidate block has been found.
+		return &blk, nil
+	}
+
+	return nil, nil
+}
+
+func (a *Account) nextSendUrgentBlock(sendBkt *bolt.Bucket, doc *pki.Document, now uint64) (*sendBlockCtx, error) {
+	// Mostly like nextSendMessageBlock(), except urgent requests are not
+	// retransmitted and will only have a single block of payload.
+
+	urgentSpoolBkt := sendBkt.Bucket([]byte(urgentSpoolBucket))
+
+	// Iterate in ascending queue order (Oldest message).
+	var blk = sendBlockCtx{isUrgent: true}
+	cur := urgentSpoolBkt.Cursor()
+	for k, v := cur.First(); k != nil; k, v = cur.Next() {
+		if v != nil {
+			continue
+		}
+		msgBkt := urgentSpoolBkt.Bucket(k)
+
+		// Skip messages that will soon be bounced.
+		if b := msgBkt.Get([]byte(bounceAtKey)); len(b) == 8 {
+			bounceAt := binary.BigEndian.Uint64(b[:])
+			if bounceAt < now {
+				continue
 			}
+		}
+
+		// Copy out the block and relevant meta-data.
+		blk.provider = string(msgBkt.Get([]byte(providerKey)))
+		pDesc, err := doc.GetProvider(blk.provider)
+		if err != nil {
+			continue
+		}
+
+		// Fixup the user (Kaetzchen service ID) to endpoint, after
+		// making sure it still exists in the current document.
+		blk.user = string(msgBkt.Get([]byte(userKey)))
+		if params, ok := pDesc.Kaetzchen[blk.user]; ok {
+			if blk.user, ok = params["endpoint"].(string); !ok {
+				continue
+			}
+		} else {
+			// No such service.
+			continue
+		}
+
+		// Copy out the payload and the rest of the metadata.
+		copy(blk.msgID[:], msgBkt.Get([]byte(messageIDKey)))
+		payload := a.dbGetAndDecrypt(msgBkt, []byte(plaintextKey))
+		blk.payload = make([]byte, 0, len(payload))
+		blk.payload = append(blk.payload, payload...)
+		if b := msgBkt.Get([]byte(unreliableKey)); len(b) == 1 && b[0] == 0x01 {
+			blk.isUnreliable = true
+		} else if _, err := io.ReadFull(rand.Reader, blk.surbID[:]); err != nil {
+			return nil, err
 		}
 
 		// A candidate block has been found.
@@ -489,9 +653,9 @@ func (a *Account) onSURB(surbID *[sConstants.SURBIDLength]byte, payload []byte) 
 		}
 
 		// Decrypt and validate the SURB payload.
-		k := bkt.Get([]byte(sprpKey))
-		surbKey := make([]byte, 0, len(k))
-		surbKey = append(surbKey, k...) // Copy, `k` is read-only.
+		b := bkt.Get([]byte(sprpKey))
+		surbKey := make([]byte, 0, len(b))
+		surbKey = append(surbKey, b...) // Copy, `b` is read-only.
 		plaintext, err := sphinx.DecryptSURBPayload(payload, surbKey)
 		if err != nil {
 			// Either the sender messed up generating the packet from the
@@ -506,30 +670,56 @@ func (a *Account) onSURB(surbID *[sConstants.SURBIDLength]byte, payload []byte) 
 		// authenticated decryption succeeded).
 		defer surbsBkt.DeleteBucket(surbID[:])
 
-		// When this does more than process ACKs, this is where it would be
-		// differentiated.
-		if len(plaintext) != constants.ForwardPayloadLength || !utils.CtIsZero(plaintext) {
-			// The SURB-ACK payload format is a maximum sized payload
-			// consisting of all 0x00 bytes.
-			a.log.Warningf("Discarding SURB %v: Malformed payload.", idStr)
+		if len(plaintext) != constants.ForwardPayloadLength {
+			a.log.Warningf("Discarding SURB %v: Invalid payload size: %v", idStr, len(plaintext))
 			return nil
 		}
 
-		// This is a valid ACK.  Retreive the rest of the metadata, and handle
-		// it.
-		ack := new(surbACK)
-		if err = ack.fromBucket(bkt); err != nil {
+		// Retreive the rest of the metadata.
+		ctx := new(surbCtx)
+		if err = ctx.fromBucket(bkt); err != nil {
 			// This should NEVER happen.
-			a.log.Warningf("Failed to lookup SURB-ACK %v: %v", idStr, err)
+			a.log.Warningf("Failed to lookup SURB %v: %v", idStr, err)
 			return nil
 		}
 
-		a.onACK(idStr, sendBkt, ack, false)
+		if plaintext[0] != ctx.surbType {
+			a.log.Warningf("Discarding SURB %v: Unexpected type: 0x%02x (expected 0x%02x)", idStr, plaintext[0], ctx.surbType)
+			// Send a failure message iff the expected type is
+			// surbTypeKaetzchen.
+			if ctx.surbType == surbTypeKaetzchen {
+				a.onKaezchenComplete(ctx.messageID[:], nil, errInvalidReply)
+			}
+			return nil
+		}
+
+		// Shunt off the SURB to the correct handler based on the format id.
+		switch ctx.surbType {
+		case surbTypeACK:
+			// Validate that the ACK payload is entirely '0x00'.
+			if !utils.CtIsZero(plaintext) {
+				a.log.Warningf("Discarding SURB-ACK %v: Malformed payload.", idStr)
+				return nil
+			}
+
+			a.onACK(idStr, sendBkt, ctx, false)
+		case surbTypeKaetzchen:
+			// Validate the reserved field.
+			if plaintext[1] != 0 {
+				a.log.Warningf("Discarding Kaetzchen SURB %v: Malformed payload.", idStr)
+				a.onKaezchenComplete(ctx.messageID[:], nil, errInvalidReply)
+				return nil
+			}
+
+			a.onKaetzchenReply(idStr, ctx, plaintext[2:]) // Omit the header.
+		default:
+			a.log.Warningf("Discarding SURB %v: Unknown type: 0x%02x", idStr, ctx.surbType)
+		}
 		return nil
 	})
 }
 
-func (a *Account) onACK(idStr string, sendBkt *bolt.Bucket, ack *surbACK, isSynthetic bool) {
+func (a *Account) onACK(idStr string, sendBkt *bolt.Bucket, ack *surbCtx, isSynthetic bool) {
 	msgIDStr := hex.EncodeToString(ack.messageID[:])
 	a.log.Debugf("OnACK: %v [%v](Block: %v ETA: %v)", idStr, msgIDStr, ack.blockID, ack.eta)
 
@@ -572,6 +762,14 @@ func (a *Account) onACK(idStr string, sendBkt *bolt.Bucket, ack *surbACK, isSynt
 	msgBkt.Put([]byte(lastACKKey), uint64ToBytes(a.nowUnix()))
 }
 
+func (a *Account) onKaetzchenReply(idStr string, rep *surbCtx, payload []byte) {
+	msgIDStr := hex.EncodeToString(rep.messageID[:])
+	a.log.Debugf("OnKaetzchenReply: %v [%v](ETA: %v)", idStr, msgIDStr, rep.eta)
+
+	// Pass the reply to the user.
+	a.onKaezchenComplete(rep.messageID[:], payload, nil)
+}
+
 func (a *Account) doSendGC() {
 	const gcIntervalSec = 300 // 5 minutes.
 
@@ -584,7 +782,7 @@ func (a *Account) doSendGC() {
 
 	a.log.Debugf("Starting send state GC cycle.")
 
-	surbsExamined, surbsDeleted, msgsBounced := 0, 0, 0
+	surbsExamined, surbsDeleted, msgsBounced, urgentMsgsBounced := 0, 0, 0, 0
 	if err := a.db.Update(func(tx *bolt.Tx) error {
 		sendBkt := tx.Bucket([]byte(sendBucket))
 		recvBkt := tx.Bucket([]byte(recvBucket))
@@ -605,6 +803,15 @@ func (a *Account) doSendGC() {
 				purge = eta+uint64(a.s.cfg.Debug.RetransmitSlack) < now
 			}
 			if purge {
+				if b := surbBkt.Get([]byte(typeKey)); len(b) == 1 && b[0] == surbTypeKaetzchen {
+					// This was for an urgent message that did not get ACKed.
+					// Send a completion event notifing the caller of the
+					// failure.
+					b = surbBkt.Get([]byte(messageIDKey))
+					msgID := make([]byte, 0, len(b))
+					msgID = append(msgID, b...)
+					a.onKaezchenComplete(msgID, nil, errReplyTimeout)
+				}
 				cur.Delete()
 				surbsDeleted++
 			}
@@ -657,6 +864,33 @@ func (a *Account) doSendGC() {
 			}
 		}
 
+		// Bounce timed out urgent messages.
+		urgentSpoolBkt := sendBkt.Bucket([]byte(urgentSpoolBucket))
+		cur = urgentSpoolBkt.Cursor()
+		for k, v := cur.First(); k != nil; k, v = cur.Next() {
+			if v != nil {
+				continue
+			}
+
+			msgBkt := urgentSpoolBkt.Bucket(k)
+			if bounceAtBytes := msgBkt.Get([]byte(bounceAtKey)); len(bounceAtBytes) == 8 {
+				bounceAt := binary.BigEndian.Uint64(bounceAtBytes)
+				if bounceAt < now {
+					// This was for an urgent message that did not get sent.
+					// Send a completion event notifing the caller of the
+					// failure.
+					b := msgBkt.Get([]byte(messageIDKey))
+					msgID := make([]byte, 0, len(b))
+					msgID = append(msgID, b...)
+
+					a.onKaezchenComplete(msgID, nil, errSendTimeout)
+
+					urgentMsgsBounced++
+					cur.Delete()
+				}
+			}
+		}
+
 		// Update the timestamp of the last GC cycle.
 		sendBkt.Put([]byte(lastSendGCKey), uint64ToBytes(now))
 
@@ -666,8 +900,17 @@ func (a *Account) doSendGC() {
 		return
 	}
 
-	a.log.Debugf("Finished send state GC cycle: %v/%v SURBs pruned, %v messages bounced", surbsDeleted, surbsExamined, msgsBounced)
+	a.log.Debugf("Finished send state GC cycle: %v/%v SURBs pruned, %v messages %v urgent bounced", surbsDeleted, surbsExamined, msgsBounced, urgentMsgsBounced)
 	a.lastSendGC = now
+}
+
+func (a *Account) onKaezchenComplete(msgID, payload []byte, err error) {
+	a.s.eventCh <- &event.KaetzchenReplyEvent{
+		AccountID: a.id,
+		MessageID: msgID,
+		Payload:   payload,
+		Err:       err,
+	}
 }
 
 func sendSpoolEntryByID(spoolBkt *bolt.Bucket, id *[block.MessageIDLength]byte) ([]byte, *bolt.Bucket) {

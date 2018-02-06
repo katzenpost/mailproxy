@@ -111,6 +111,29 @@ func (p *Proxy) preprocessOutgoing(b []byte, viaESMTP bool) ([]byte, *message.En
 	return payload, entity, isUnreliable, err
 }
 
+// SendKaetzchenRequest enqueues the payload for transmission from the sender
+// to the service on the remote provider, and returns the message identifier
+// tag.
+//
+// Note: Replies are delivered as `event.KaetzchenReplyEvent`s, via the
+// EventSink channel.  It is on the caller to keep track of requests via
+// the message identifier tag to correctly handle responses.
+func (p *Proxy) SendKaetzchenRequest(senderID, serviceID, providerID string, payload []byte, wantResponse bool) ([]byte, error) {
+	acc, _, err := p.getAccount(senderID)
+	if err != nil {
+		return nil, err
+	}
+	defer acc.Deref()
+
+	rcpt := &account.Recipient{
+		ID:       serviceID + "@" + providerID,
+		User:     serviceID, // Fixed up in EnqueueKaetzchenRequest.
+		Provider: providerID,
+	}
+
+	return acc.EnqueueKaetzchenRequest(rcpt, payload, !wantResponse)
+}
+
 // Message is the received message.
 type Message struct {
 	// Payload is the Message payload.
