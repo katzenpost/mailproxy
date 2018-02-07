@@ -154,7 +154,10 @@ func (a *Account) dbEncryptAndPut(bkt *bolt.Bucket, key, value []byte) error {
 	}
 
 	hs := a.newDBCryptoState(false)
-	ciphertext, _, _ := hs.WriteMessage(nil, value)
+	ciphertext, _, _, err := hs.WriteMessage(nil, value)
+	if err != nil {
+		return err
+	}
 	return bkt.Put(key, ciphertext)
 }
 
@@ -200,7 +203,11 @@ func (a *Account) newDBCryptoState(forDecrypt bool) *noise.HandshakeState {
 		cfg.PeerStatic = a.storageKey.PublicKey().Bytes()
 	}
 
-	return noise.NewHandshakeState(cfg)
+	hs, err := noise.NewHandshakeState(cfg)
+	if err != nil {
+		panic("newDBCryptoState: initialization failed: " + err.Error())
+	}
+	return hs
 }
 
 func uint64ToBytes(i uint64) []byte {
