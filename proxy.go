@@ -242,6 +242,9 @@ func New(cfg *config.Config) (*Proxy, error) {
 	// Start listening on the management if enabled, now that all subsystems
 	// have had the opportunity to register commands.
 	if p.management != nil {
+		const cmdQueryRecipient = "QUERY_RECIPIENT"
+
+		p.management.RegisterCommand(cmdQueryRecipient, p.onQueryRecipient)
 		p.management.Start()
 	}
 
