@@ -45,7 +45,6 @@ type Account struct {
 	db        *bolt.DB
 	authority *authority.Authority
 	client    *minclient.Client
-	basePath  string
 
 	linkKey     *ecdh.PrivateKey
 	identityKey *ecdh.PrivateKey
@@ -53,8 +52,7 @@ type Account struct {
 
 	popSession *popSession
 
-	id       string
-	refCount int32
+	id string
 
 	onRecvCh       chan interface{}
 	opCh           chan workerOp
@@ -65,6 +63,7 @@ type Account struct {
 	lastSendGC     uint64
 
 	isConnected bool
+	refCount    int32
 }
 
 // Deref decrements the reference count of the Account.  If the reference count
@@ -124,7 +123,7 @@ func (a *Account) doCleanup() {
 	}
 }
 
-func (a *Account) initKeys(cfg *config.Account) error {
+func (a *Account) initKeys(cfg *config.Account, basePath string) error {
 	var err error
 
 	if cfg.LinkKey != nil {
@@ -132,8 +131,8 @@ func (a *Account) initKeys(cfg *config.Account) error {
 		a.linkKey = new(ecdh.PrivateKey)
 		a.linkKey.FromBytes(cfg.LinkKey.Bytes())
 	} else {
-		linkPriv := filepath.Join(a.basePath, "link.private.pem")
-		linkPub := filepath.Join(a.basePath, "link.public.pem")
+		linkPriv := filepath.Join(basePath, "link.private.pem")
+		linkPub := filepath.Join(basePath, "link.public.pem")
 
 		if a.linkKey, err = ecdh.Load(linkPriv, linkPub, rand.Reader); err != nil {
 			return err
@@ -145,8 +144,8 @@ func (a *Account) initKeys(cfg *config.Account) error {
 		a.identityKey = new(ecdh.PrivateKey)
 		a.identityKey.FromBytes(cfg.IdentityKey.Bytes())
 	} else {
-		idPriv := filepath.Join(a.basePath, "identity.private.pem")
-		idPub := filepath.Join(a.basePath, "identity.public.pem")
+		idPriv := filepath.Join(basePath, "identity.private.pem")
+		idPub := filepath.Join(basePath, "identity.public.pem")
 		a.identityKey, err = ecdh.Load(idPriv, idPub, rand.Reader)
 	}
 
@@ -219,19 +218,19 @@ func (s *Store) newAccount(id string, cfg *config.Account, pCfg *proxy.Config) (
 	a := new(Account)
 	a.s = s
 	a.log = s.logBackend.GetLogger("account:" + id)
-	a.basePath = filepath.Join(s.cfg.Proxy.DataDir, id)
 	a.onRecvCh = make(chan interface{}, 1)
 	a.opCh = make(chan workerOp, 8) // Workaround minclient#1.
 	a.id = id
 	a.refCount = 1 // Store holds a reference.
 
 	// Initialize the per-account directory.
-	if err := utils.MkDataDir(a.basePath); err != nil {
+	basePath := filepath.Join(s.cfg.Proxy.DataDir, id)
+	if err := utils.MkDataDir(basePath); err != nil {
 		return nil, err
 	}
 
 	// Initialize the cryptographic keys.
-	if err := a.initKeys(cfg); err != nil {
+	if err := a.initKeys(cfg, basePath); err != nil {
 		return nil, err
 	}
 
@@ -248,7 +247,7 @@ func (s *Store) newAccount(id string, cfg *config.Account, pCfg *proxy.Config) (
 	}()
 
 	// Initialize the storage backend.
-	if err := a.initDatabase(); err != nil {
+	if err := a.initDatabase(basePath); err != nil {
 		return nil, err
 	}
 

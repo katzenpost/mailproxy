@@ -46,7 +46,7 @@ import (
 	"github.com/katzenpost/noise"
 )
 
-func (a *Account) initDatabase() error {
+func (a *Account) initDatabase(basePath string) error {
 	const (
 		metadataBucket = "metadata"
 		versionKey     = "version"
@@ -54,7 +54,7 @@ func (a *Account) initDatabase() error {
 	)
 
 	var err error
-	a.db, err = bolt.Open(filepath.Join(a.basePath, "storage.db"), 0600, nil)
+	a.db, err = bolt.Open(filepath.Join(basePath, "storage.db"), 0600, nil)
 	if err != nil {
 		return err
 	}

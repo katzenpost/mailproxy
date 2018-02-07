@@ -115,7 +115,6 @@ const (
 var (
 	errEntryGone  = errors.New("spool entry disapeared while sending")
 	errNoDocument = errors.New("no directory information available")
-	errNoProvider = errors.New("no such provider")
 
 	errSendTimeout  = errors.New("timed out attempting to send")
 	errReplyTimeout = errors.New("timed out waiting for reply")
@@ -233,18 +232,8 @@ func (a *Account) EnqueueKaetzchenRequest(recipient *Recipient, msg []byte, isUn
 
 	// Check that the recipient is a service with a valid endpoint.  This
 	// is re-checked when scheduling the message for transmission.
-	pDesc, err := doc.GetProvider(recipient.Provider)
-	if err != nil {
+	if _, err := a.getServiceEndpoint(doc, recipient.Provider, recipient.User); err != nil {
 		return nil, err
-	}
-
-	// Fixup the user (Kaetzchen service ID) to endpoint.
-	if params, ok := pDesc.Kaetzchen[recipient.User]; ok {
-		if _, ok = params["endpoint"].(string); !ok {
-			return nil, fmt.Errorf("invalid endpoint in descriptor")
-		}
-	} else {
-		return nil, fmt.Errorf("no such service: '%v'", recipient.User)
 	}
 
 	// Generate a distinct message ID for this message.
@@ -594,22 +583,12 @@ func (a *Account) nextSendUrgentBlock(sendBkt *bolt.Bucket, doc *pki.Document, n
 			}
 		}
 
-		// Copy out the block and relevant meta-data.
-		blk.provider = string(msgBkt.Get([]byte(providerKey)))
-		pDesc, err := doc.GetProvider(blk.provider)
-		if err != nil {
-			continue
-		}
-
 		// Fixup the user (Kaetzchen service ID) to endpoint, after
 		// making sure it still exists in the current document.
+		var err error
+		blk.provider = string(msgBkt.Get([]byte(providerKey)))
 		blk.user = string(msgBkt.Get([]byte(userKey)))
-		if params, ok := pDesc.Kaetzchen[blk.user]; ok {
-			if blk.user, ok = params["endpoint"].(string); !ok {
-				continue
-			}
-		} else {
-			// No such service.
+		if blk.user, err = a.getServiceEndpoint(doc, blk.provider, blk.user); err != nil {
 			continue
 		}
 
@@ -620,7 +599,7 @@ func (a *Account) nextSendUrgentBlock(sendBkt *bolt.Bucket, doc *pki.Document, n
 		blk.payload = append(blk.payload, payload...)
 		if b := msgBkt.Get([]byte(unreliableKey)); len(b) == 1 && b[0] == 0x01 {
 			blk.isUnreliable = true
-		} else if _, err := io.ReadFull(rand.Reader, blk.surbID[:]); err != nil {
+		} else if _, err = io.ReadFull(rand.Reader, blk.surbID[:]); err != nil {
 			return nil, err
 		}
 
@@ -911,6 +890,24 @@ func (a *Account) onKaezchenComplete(msgID, payload []byte, err error) {
 		Payload:   payload,
 		Err:       err,
 	}
+}
+
+func (a *Account) getServiceEndpoint(doc *pki.Document, provider, serviceID string) (string, error) {
+	pDesc, err := doc.GetProvider(provider)
+	if err != nil {
+		return "", err
+	}
+
+	params, ok := pDesc.Kaetzchen[serviceID]
+	if !ok {
+		return "", fmt.Errorf("no such service: '%v'", serviceID)
+	}
+
+	endpoint, ok := params["endpoint"].(string)
+	if ok {
+		return endpoint, nil
+	}
+	return "", fmt.Errorf("invalid endpoint in descriptor")
 }
 
 func sendSpoolEntryByID(spoolBkt *bolt.Bucket, id *[block.MessageIDLength]byte) ([]byte, *bolt.Bucket) {
