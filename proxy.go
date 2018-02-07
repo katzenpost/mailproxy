@@ -26,6 +26,7 @@ import (
 	"github.com/katzenpost/core/log"
 	"github.com/katzenpost/core/thwack"
 	"github.com/katzenpost/core/utils"
+	"github.com/katzenpost/core/worker"
 	"github.com/katzenpost/mailproxy/config"
 	"github.com/katzenpost/mailproxy/internal/account"
 	"github.com/katzenpost/mailproxy/internal/authority"
@@ -39,6 +40,7 @@ var ErrGenerateOnly = errors.New("mailproxy: GenerateOnly set")
 
 // Proxy is a mail proxy server instance.
 type Proxy struct {
+	worker.Worker
 	cfg *config.Config
 
 	logBackend *log.Backend
@@ -115,6 +117,7 @@ func (p *Proxy) halt() {
 		p.authorities = nil
 	}
 
+	p.Halt()
 	close(p.fatalErrCh)
 
 	p.log.Noticef("Shutdown complete.")

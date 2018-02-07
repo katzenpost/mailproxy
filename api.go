@@ -25,6 +25,7 @@ import (
 	"github.com/katzenpost/core/crypto/ecdh"
 	"github.com/katzenpost/core/epochtime"
 	"github.com/katzenpost/core/pki"
+	"github.com/katzenpost/mailproxy/event"
 	"github.com/katzenpost/mailproxy/internal/account"
 	"github.com/katzenpost/mailproxy/internal/imf"
 	"gopkg.in/eapache/channels.v1"
@@ -240,12 +241,21 @@ func (p *Proxy) ListProviders(authorityID string) ([]*pki.MixDescriptor, error) 
 	return doc.Providers, nil
 }
 
-func (p *Proxy) initializeEventSink() {
-	var out interface{}
-	if p.cfg.Proxy.EventSink != nil {
-		out = p.cfg.Proxy.EventSink
-	} else {
-		out = channels.NewBlackHole().In()
+func (p *Proxy) eventSinkWorker() {
+	for {
+		select {
+		case <-p.HaltCh():
+			return
+		case e := <-p.eventCh.Out():
+			p.cfg.Proxy.EventSink <- e.(event.Event)
+		}
 	}
-	channels.Unwrap(p.eventCh, out)
+}
+
+func (p *Proxy) initializeEventSink() {
+	if p.cfg.Proxy.EventSink != nil {
+		p.Go(p.eventSinkWorker)
+	} else {
+		channels.Pipe(p.eventCh, channels.NewBlackHole())
+	}
 }
