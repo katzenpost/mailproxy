@@ -381,10 +381,15 @@ func (a *Account) sendNextBlock() error {
 		if blk.isUrgent {
 			urgentSpoolBkt := sendBkt.Bucket([]byte(urgentSpoolBucket))
 			msgSeq, msgBkt := sendSpoolEntryByID(urgentSpoolBkt, &blk.msgID)
-			if msgBkt != nil {
-				urgentSpoolBkt.DeleteBucket(msgSeq)
-				a.resetSpoolSeq(urgentSpoolBkt)
+			if msgBkt == nil {
+				// This is extremely unlikely , but can happen if the
+				// message times out right as it is being sent.  It's not
+				// possible to un-send the query, so roll back the
+				// transaction since the caller thinks it failed.
+				return errEntryGone
 			}
+			urgentSpoolBkt.DeleteBucket(msgSeq)
+			a.resetSpoolSeq(urgentSpoolBkt)
 			return nil
 		}
 
