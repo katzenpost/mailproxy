@@ -110,6 +110,7 @@ const (
 
 	surbTypeACK       = 0
 	surbTypeKaetzchen = 1
+	surbTypeInternal  = 2
 )
 
 var (
@@ -139,6 +140,7 @@ type sendBlockCtx struct {
 	sentBlocks   uint64
 	isUnreliable bool
 	isUrgent     bool
+	isInternal   bool
 }
 
 type surbCtx struct {
@@ -294,6 +296,37 @@ func (a *Account) EnqueueKaetzchenRequest(recipient *Recipient, msg []byte, isUn
 	return msgID[:], nil
 }
 
+func (a *Account) sendInternalKaetzchenRequest(serviceID, providerID string, payload []byte, wantResponse bool) error {
+	doc := a.client.CurrentDocument()
+	if doc == nil {
+		return errNoDocument
+	}
+
+	var blk = sendBlockCtx{
+		payload:      payload,
+		user:         serviceID,
+		provider:     providerID,
+		isUnreliable: !wantResponse,
+		isUrgent:     true,
+		isInternal:   true,
+	}
+
+	var err error
+	if blk.user, err = a.getServiceEndpoint(doc, blk.provider, blk.user); err != nil {
+		return err
+	}
+	if _, err = io.ReadFull(rand.Reader, blk.msgID[:]); err != nil {
+		return err
+	}
+	if !blk.isUnreliable {
+		if _, err = io.ReadFull(rand.Reader, blk.surbID[:]); err != nil {
+			return err
+		}
+	}
+
+	return a.doSend(&blk)
+}
+
 func (a *Account) sendNextBlock() (bool, error) {
 	// Unlike everything else that uses a single transaction to accomplish
 	// various operations, the standard send path uses two, because the
@@ -376,16 +409,23 @@ func (a *Account) doSend(blk *sendBlockCtx) error {
 			surbBkt.Put([]byte(sprpKey), surbKey)
 			surbBkt.Put([]byte(blockIDKey), uint64ToBytes(blk.blockID))
 			surbBkt.Put([]byte(etaKey), uint64ToBytes(eta))
-			if blk.isUrgent {
+			switch {
+			case blk.isInternal:
+				surbBkt.Put([]byte(typeKey), []byte{surbTypeInternal})
+			case blk.isUrgent:
 				surbBkt.Put([]byte(typeKey), []byte{surbTypeKaetzchen})
-			} else {
+			default:
 				surbBkt.Put([]byte(typeKey), []byte{surbTypeACK})
 			}
 		}
 
-		// Urgent messages require different handling by virtue of not
-		// being retransmitted or persisted.
-		if blk.isUrgent {
+		switch {
+		case blk.isInternal:
+			// Internal messages are like urgent messages, except they
+			// also lack a send spool entry.
+			return nil
+		case blk.isUrgent:
+			// Urgent messages are not retransmitted or persisted.
 			urgentSpoolBkt := sendBkt.Bucket([]byte(urgentSpoolBucket))
 			msgSeq, msgBkt := sendSpoolEntryByID(urgentSpoolBkt, &blk.msgID)
 			if msgBkt == nil {
@@ -398,6 +438,7 @@ func (a *Account) doSend(blk *sendBlockCtx) error {
 			urgentSpoolBkt.DeleteBucket(msgSeq)
 			a.resetSpoolSeq(urgentSpoolBkt)
 			return nil
+		default:
 		}
 
 		// Update the message in-flight status.
@@ -550,8 +591,7 @@ func (a *Account) nextSendMessageBlock(sendBkt *bolt.Bucket, doc *pki.Document, 
 		}
 		blocksBkt := msgBkt.Bucket([]byte(blocksBucket))
 		if b := blocksBkt.Get(uint64ToBytes(blk.blockID)); b != nil {
-			blk.payload = make([]byte, 0, len(b))
-			blk.payload = append(blk.payload, b...)
+			blk.payload = copyOutBytes(b)
 		} else {
 			// This should never happen, but the GC cycle will deal with
 			// this.
@@ -606,9 +646,7 @@ func (a *Account) nextSendUrgentBlock(sendBkt *bolt.Bucket, doc *pki.Document, n
 
 		// Copy out the payload and the rest of the metadata.
 		copy(blk.msgID[:], msgBkt.Get([]byte(messageIDKey)))
-		payload := a.dbGetAndDecrypt(msgBkt, []byte(plaintextKey))
-		blk.payload = make([]byte, 0, len(payload))
-		blk.payload = append(blk.payload, payload...)
+		blk.payload = copyOutBytes(a.dbGetAndDecrypt(msgBkt, []byte(plaintextKey)))
 		if b := msgBkt.Get([]byte(unreliableKey)); len(b) == 1 && b[0] == 0x01 {
 			blk.isUnreliable = true
 		} else if _, err = io.ReadFull(rand.Reader, blk.surbID[:]); err != nil {
@@ -644,9 +682,7 @@ func (a *Account) onSURB(surbID *[sConstants.SURBIDLength]byte, payload []byte) 
 		}
 
 		// Decrypt and validate the SURB payload.
-		b := bkt.Get([]byte(sprpKey))
-		surbKey := make([]byte, 0, len(b))
-		surbKey = append(surbKey, b...) // Copy, `b` is read-only.
+		surbKey := copyOutBytes(bkt.Get([]byte(sprpKey)))
 		plaintext, err := sphinx.DecryptSURBPayload(payload, surbKey)
 		if err != nil {
 			// Either the sender messed up generating the packet from the
@@ -674,11 +710,16 @@ func (a *Account) onSURB(surbID *[sConstants.SURBIDLength]byte, payload []byte) 
 			return nil
 		}
 
-		if plaintext[0] != ctx.surbType {
-			a.log.Warningf("Discarding SURB %v: Unexpected type: 0x%02x (expected 0x%02x)", idStr, plaintext[0], ctx.surbType)
+		expectedType := ctx.surbType
+		if expectedType == surbTypeInternal {
+			expectedType = surbTypeKaetzchen
+		}
+		if plaintext[0] != expectedType {
+			a.log.Warningf("Discarding SURB %v: Unexpected type: 0x%02x (expected 0x%02x)", idStr, plaintext[0], expectedType)
 
 			// Send a failure message iff the expected type is
-			// surbTypeKaetzchen.
+			// surbTypeKaetzchen, but not if it is a internal Kaetzchen
+			// query.
 			if ctx.surbType == surbTypeKaetzchen {
 				a.onKaezchenComplete(ctx.messageID[:], nil, errInvalidReply)
 			}
@@ -695,7 +736,7 @@ func (a *Account) onSURB(surbID *[sConstants.SURBIDLength]byte, payload []byte) 
 			}
 
 			a.onACK(idStr, sendBkt, ctx, false)
-		case surbTypeKaetzchen:
+		case surbTypeKaetzchen, surbTypeInternal:
 			// Validate the reserved field.
 			if plaintext[1] != 0 {
 				a.log.Warningf("Discarding Kaetzchen SURB %v: Malformed payload.", idStr)
@@ -706,8 +747,10 @@ func (a *Account) onSURB(surbID *[sConstants.SURBIDLength]byte, payload []byte) 
 			msgIDStr := hex.EncodeToString(ctx.messageID[:])
 			a.log.Debugf("OnKaetzchenReply: %v [%v](ETA: %v)", idStr, msgIDStr, ctx.eta)
 
-			// Pass the reply to the user, omitting the reply header.
-			a.onKaezchenComplete(ctx.messageID[:], plaintext[2:], nil)
+			if ctx.surbType == surbTypeKaetzchen {
+				// Pass the reply to the user, omitting the reply header.
+				a.onKaezchenComplete(ctx.messageID[:], plaintext[2:], nil)
+			}
 		default:
 			a.log.Warningf("Discarding SURB %v: Unknown type: 0x%02x", idStr, ctx.surbType)
 		}
@@ -791,14 +834,19 @@ func (a *Account) doSendGC() {
 				purge = eta+uint64(a.s.cfg.Debug.RetransmitSlack) < now
 			}
 			if purge {
-				if b := surbBkt.Get([]byte(typeKey)); len(b) == 1 && b[0] == surbTypeKaetzchen {
-					// This was for an urgent message that did not get ACKed.
-					// Send a completion event notifing the caller of the
-					// failure.
-					b = surbBkt.Get([]byte(messageIDKey))
-					msgID := make([]byte, 0, len(b))
-					msgID = append(msgID, b...)
-					a.onKaezchenComplete(msgID, nil, errReplyTimeout)
+				if b := surbBkt.Get([]byte(typeKey)); len(b) == 1 {
+					switch b[0] {
+					case surbTypeInternal:
+						// A internal Kaetzchen request failed, do nothing
+						// special for now.
+					case surbTypeKaetzchen:
+						// This was for an urgent message that did not get
+						// ACKed.  Send a completion event notifing the
+						// caller of the failure.
+						msgID := copyOutBytes(surbBkt.Get([]byte(messageIDKey)))
+						a.onKaezchenComplete(msgID, nil, errReplyTimeout)
+					default:
+					}
 				}
 				cur.Delete()
 				surbsDeleted++
@@ -867,9 +915,7 @@ func (a *Account) doSendGC() {
 					// This was for an urgent message that did not get sent.
 					// Send a completion event notifing the caller of the
 					// failure.
-					b := msgBkt.Get([]byte(messageIDKey))
-					msgID := make([]byte, 0, len(b))
-					msgID = append(msgID, b...)
+					msgID := copyOutBytes(msgBkt.Get([]byte(messageIDKey)))
 
 					a.onKaezchenComplete(msgID, nil, errSendTimeout)
 

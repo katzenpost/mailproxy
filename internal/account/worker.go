@@ -20,6 +20,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/katzenpost/core/constants"
 	"github.com/katzenpost/core/crypto/rand"
 	"github.com/katzenpost/core/pki"
 )
@@ -40,6 +41,7 @@ func (a *Account) worker() {
 	const (
 		maxDuration  = math.MaxInt64
 		minSendShift = 1000 // 1 second.
+		serviceLoop  = "loop"
 	)
 
 	// Intentionally use super conservative values for the send scheduling
@@ -53,7 +55,7 @@ func (a *Account) worker() {
 	timer := time.NewTimer(wakeInterval)
 	defer timer.Stop()
 
-	var isConnected bool
+	var isConnected, hasLoopService bool
 	for {
 		var timerFired bool
 		var qo workerOp
@@ -68,11 +70,17 @@ func (a *Account) worker() {
 		if timerFired {
 			// It is time to send another block if one exists.
 			if isConnected { // Suppress spurious wakeups.
-				// TODO: If sendNextBlock() returns false and no error,
-				// this is an opportunity to send cover traffic.
-				_, err := a.sendNextBlock()
+				// Attempt to send user data first, if any exists.
+				didSend, err := a.sendNextBlock()
 				if err != nil {
 					a.log.Warningf("Failed to send queued block: %v", err)
+				} else if !didSend && hasLoopService {
+					var coverPayload [constants.UserForwardPayloadLength]byte
+
+					// Send cover traffic via the loop service instead.
+					if err = a.sendInternalKaetzchenRequest(serviceLoop, a.clientCfg.Provider, coverPayload[:], true); err != nil {
+						a.log.Warningf("Failed to send cover traffic: %v", err)
+					}
 				}
 			}
 		} else {
@@ -121,6 +129,22 @@ func (a *Account) worker() {
 				if newSendMaxInterval := op.doc.SendMaxInterval; newSendMaxInterval != sendMaxInterval {
 					a.log.Debugf("Updated SendMaxInterval: %v", newSendMaxInterval)
 					sendMaxInterval = newSendMaxInterval
+				}
+
+				// Determine if it is possible to send cover traffic.
+				if ep, err := a.getServiceEndpoint(op.doc, a.clientCfg.Provider, serviceLoop); err != nil {
+					a.log.Debugf("Failed to find loop service: %v", err)
+					hasLoopService = false
+				} else {
+					a.log.Debugf("Provider has loop service: '%v'", ep)
+					// FUCK
+					hasLoopService = true
+				}
+
+				// Override sending decoy traffic based on config.
+				if !a.s.cfg.Debug.SendDecoyTraffic {
+					a.log.Debugf("Client decoy traffic disabled via config.")
+					hasLoopService = false
 				}
 			default:
 				a.log.Warningf("BUG: Worker received nonsensical op: %T", op)

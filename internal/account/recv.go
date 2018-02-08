@@ -413,7 +413,7 @@ func (a *Account) storeMessage(recvBkt *bolt.Bucket, sender *ecdh.PublicKey, pay
 	a.s.eventCh <- &event.MessageReceivedEvent{
 		AccountID: a.id,
 		SenderKey: sender,
-		MessageID: append([]byte{}, recvID[:]...),
+		MessageID: recvID[:],
 	}
 }
 
@@ -595,10 +595,8 @@ func (a *Account) ReceivePeekPop(isPop bool) ([]byte, *ecdh.PublicKey, []byte, e
 	// There is a message to return.
 	msgBkt := spoolBkt.Bucket(mKey)
 
-	pt := a.dbGetAndDecrypt(msgBkt, []byte(plaintextKey))
-	msg := make([]byte, 0, len(pt))
-	msg = append(msg, pt...)
-	msgID := append([]byte{}, msgBkt.Get([]byte(messageIDKey))...)
+	msg := copyOutBytes(a.dbGetAndDecrypt(msgBkt, []byte(plaintextKey)))
+	msgID := copyOutBytes(msgBkt.Get([]byte(messageIDKey)))
 	var sender *ecdh.PublicKey
 	if rawPub := a.dbGetAndDecrypt(msgBkt, []byte(senderKey)); rawPub != nil {
 		sender = new(ecdh.PublicKey)
@@ -637,9 +635,7 @@ func (a *Account) newPOPSession() (pop3.BackendSession, error) {
 			s.sequenceMap[idx] = binary.BigEndian.Uint64(k)
 
 			msgBkt := spoolBkt.Bucket(k)
-			pt := a.dbGetAndDecrypt(msgBkt, []byte(plaintextKey)) // MUST COPY.
-			msg := make([]byte, 0, len(pt))
-			msg = append(msg, pt...)
+			msg := copyOutBytes(a.dbGetAndDecrypt(msgBkt, []byte(plaintextKey)))
 			s.messages = append(s.messages, msg)
 			idx++
 		}

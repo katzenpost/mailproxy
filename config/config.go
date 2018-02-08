@@ -162,6 +162,13 @@ type Debug struct {
 	// the Account `User` field.
 	CaseSensitiveUserIdentifiers bool
 
+	// SendDecoyTraffic enables sending decoy traffic.  This is still
+	// experimental and untuned and thus is disabled by default.
+	//
+	// WARNING: This option will go away once a concrete client decoy
+	// traffic is more concrete.
+	SendDecoyTraffic bool
+
 	// GenerateOnly halts and cleans up the mail proxy right after long term
 	// key generation.
 	GenerateOnly bool

@@ -45,6 +45,7 @@ type Account struct {
 	db        *bolt.DB
 	authority *authority.Authority
 	client    *minclient.Client
+	clientCfg *minclient.ClientConfig
 
 	linkKey     *ecdh.PrivateKey
 	identityKey *ecdh.PrivateKey
@@ -252,7 +253,7 @@ func (s *Store) newAccount(id string, cfg *config.Account, pCfg *proxy.Config) (
 	}
 
 	// Configure and bring up the minclient instance.
-	clientCfg := &minclient.ClientConfig{
+	a.clientCfg = &minclient.ClientConfig{
 		User:                cfg.User,
 		Provider:            cfg.Provider,
 		ProviderKeyPin:      cfg.ProviderKeyPin,
@@ -274,9 +275,9 @@ func (s *Store) newAccount(id string, cfg *config.Account, pCfg *proxy.Config) (
 	if err != nil {
 		return nil, err
 	}
-	clientCfg.PKIClient = a.authority.Client()
+	a.clientCfg.PKIClient = a.authority.Client()
 
-	a.client, err = minclient.New(clientCfg)
+	a.client, err = minclient.New(a.clientCfg)
 	if err != nil {
 		return nil, err
 	}

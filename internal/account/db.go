@@ -217,3 +217,9 @@ func uint64ToBytes(i uint64) []byte {
 	binary.BigEndian.PutUint64(buf[:], i)
 	return buf[:]
 }
+
+func copyOutBytes(b []byte) []byte {
+	ret := make([]byte, 0, len(b))
+	ret = append(ret, b...)
+	return ret
+}
