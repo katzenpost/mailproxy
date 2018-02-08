@@ -129,6 +129,18 @@ type Recipient struct {
 	PublicKey *ecdh.PublicKey
 }
 
+type sendBlockCtx struct {
+	msgID        [block.MessageIDLength]byte
+	surbID       [sConstants.SURBIDLength]byte
+	payload      []byte
+	user         string
+	provider     string
+	blockID      uint64
+	sentBlocks   uint64
+	isUnreliable bool
+	isUrgent     bool
+}
+
 type surbCtx struct {
 	messageID [block.MessageIDLength]byte
 	blockID   uint64
@@ -282,35 +294,24 @@ func (a *Account) EnqueueKaetzchenRequest(recipient *Recipient, msg []byte, isUn
 	return msgID[:], nil
 }
 
-type sendBlockCtx struct {
-	msgID        [block.MessageIDLength]byte
-	surbID       [sConstants.SURBIDLength]byte
-	payload      []byte
-	user         string
-	provider     string
-	blockID      uint64
-	sentBlocks   uint64
-	isUnreliable bool
-	isUrgent     bool
-}
-
-func (a *Account) sendNextBlock() error {
+func (a *Account) sendNextBlock() (bool, error) {
 	// Unlike everything else that uses a single transaction to accomplish
-	// various operations, this uses two, because the code will deadlock
-	// on the send if a fetch related callback happens to get called while
-	// the block is passed to minclient for the send operation.
+	// various operations, the standard send path uses two, because the
+	// code will deadlock on the send if a fetch related callback happens
+	// to get called while the block is passed to minclient for the send
+	// operation.
 	//
 	// While this isn't great, the worst that can happen is one missed (or
 	// spurious) retransmission, both of which are mostly harmless.
 
 	doc := a.client.CurrentDocument()
 	if doc == nil {
-		return errNoDocument
+		return false, errNoDocument
 	}
 	now := a.nowUnix()
 
-	var blk *sendBlockCtx
 	var err error
+	var blk *sendBlockCtx
 	if err = a.db.View(func(tx *bolt.Tx) error {
 		sendBkt := tx.Bucket([]byte(sendBucket))
 		if blk, err = a.nextSendUrgentBlock(sendBkt, doc, now); err != nil {
@@ -323,14 +324,20 @@ func (a *Account) sendNextBlock() error {
 		blk, err = a.nextSendMessageBlock(sendBkt, doc, now)
 		return err
 	}); err != nil {
-		return err
+		return false, err
 	} else if blk == nil {
 		// Nothing in the queue found.
-		return nil
+		return false, nil
 	}
 
+	return true, a.doSend(blk)
+}
+
+func (a *Account) doSend(blk *sendBlockCtx) error {
 	// Actually dispatch the packet.  The `SendCiphertext` call is where the
 	// deadlock can happen in minclient.
+
+	var err error
 	msgIDStr := hex.EncodeToString(blk.msgID[:])
 	destStr := blk.user + "@" + blk.provider
 	var surbKey []byte
@@ -669,6 +676,7 @@ func (a *Account) onSURB(surbID *[sConstants.SURBIDLength]byte, payload []byte) 
 
 		if plaintext[0] != ctx.surbType {
 			a.log.Warningf("Discarding SURB %v: Unexpected type: 0x%02x (expected 0x%02x)", idStr, plaintext[0], ctx.surbType)
+
 			// Send a failure message iff the expected type is
 			// surbTypeKaetzchen.
 			if ctx.surbType == surbTypeKaetzchen {
@@ -695,7 +703,11 @@ func (a *Account) onSURB(surbID *[sConstants.SURBIDLength]byte, payload []byte) 
 				return nil
 			}
 
-			a.onKaetzchenReply(idStr, ctx, plaintext[2:]) // Omit the header.
+			msgIDStr := hex.EncodeToString(ctx.messageID[:])
+			a.log.Debugf("OnKaetzchenReply: %v [%v](ETA: %v)", idStr, msgIDStr, ctx.eta)
+
+			// Pass the reply to the user, omitting the reply header.
+			a.onKaezchenComplete(ctx.messageID[:], plaintext[2:], nil)
 		default:
 			a.log.Warningf("Discarding SURB %v: Unknown type: 0x%02x", idStr, ctx.surbType)
 		}
@@ -744,14 +756,6 @@ func (a *Account) onACK(idStr string, sendBkt *bolt.Bucket, ack *surbCtx, isSynt
 
 	// Update the "last forward progress" timestamp.
 	msgBkt.Put([]byte(lastACKKey), uint64ToBytes(a.nowUnix()))
-}
-
-func (a *Account) onKaetzchenReply(idStr string, rep *surbCtx, payload []byte) {
-	msgIDStr := hex.EncodeToString(rep.messageID[:])
-	a.log.Debugf("OnKaetzchenReply: %v [%v](ETA: %v)", idStr, msgIDStr, rep.eta)
-
-	// Pass the reply to the user.
-	a.onKaezchenComplete(rep.messageID[:], payload, nil)
 }
 
 func (a *Account) doSendGC() {

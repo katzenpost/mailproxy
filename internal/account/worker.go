@@ -68,9 +68,10 @@ func (a *Account) worker() {
 		if timerFired {
 			// It is time to send another block if one exists.
 			if isConnected { // Suppress spurious wakeups.
-				// TODO: This needs to figure out if no block was sent,
-				// and send cover traffic.
-				if err := a.sendNextBlock(); err != nil {
+				// TODO: If sendNextBlock() returns false and no error,
+				// this is an opportunity to send cover traffic.
+				_, err := a.sendNextBlock()
+				if err != nil {
 					a.log.Warningf("Failed to send queued block: %v", err)
 				}
 			}
