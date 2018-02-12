@@ -37,9 +37,13 @@ type opNewDocument struct {
 }
 
 func (a *Account) worker() {
-	const maxDuration = math.MaxInt64
+	const (
+		maxDuration = math.MaxInt64
+		minInterval = 1000 // 1000 ms
+	)
 
-	lambdaP := 15.0
+	lambdaP := 0.00001
+	maxInterval := uint64(rand.ExpQuantile(lambdaP, 0.99999))
 	mRng := rand.NewMath()
 	isConnected := false
 	wakeInterval := time.Duration(maxDuration)
@@ -97,12 +101,16 @@ func (a *Account) worker() {
 			case *opNewDocument:
 				// Update the idea of lambdaP from the PKI document.
 				if newLambdaP := op.doc.LambdaP; newLambdaP != lambdaP {
-					if newLambdaP < 1.0 {
-						a.log.Debugf("Ignoring pathologically small lambdaP: %v", newLambdaP)
-						continue
-					}
 					a.log.Debugf("Updated lambdaP: %v", newLambdaP)
 					lambdaP = newLambdaP
+				}
+				if newMaxInterval := op.doc.MaxInterval; newMaxInterval != maxInterval {
+					if newMaxInterval < minInterval {
+						a.log.Debugf("Ignoring pathologically small maxInterval: %v", newMaxInterval)
+						continue
+					}
+					a.log.Debugf("Updated maxInterval: %v", newMaxInterval)
+					maxInterval = newMaxInterval
 				}
 			default:
 				a.log.Warningf("BUG: Worker received nonsensical op: %T", op)
@@ -119,10 +127,14 @@ func (a *Account) worker() {
 			//   and sent, or a drop cover message is sent in case the
 			//   buffer is empty. Thus, from an adversarial perspective,
 			//   there is always traffic emitted modeled by Pois(lambdaP).
-			//
-			// TODO: The interval should probably be fuzzed a bit to not
-			// be an integral number of seconds (timing sidechannel?).
-			wakeInterval = time.Duration(rand.Poisson(mRng, lambdaP)) * time.Second
+			wakeMsec := uint64(rand.Exp(mRng, lambdaP)) + minInterval
+			switch {
+			case wakeMsec > maxInterval:
+				wakeMsec = maxInterval
+			default:
+			}
+
+			wakeInterval = time.Duration(wakeMsec) * time.Millisecond
 		} else {
 			wakeInterval = maxDuration
 		}
