@@ -38,19 +38,22 @@ type opNewDocument struct {
 
 func (a *Account) worker() {
 	const (
-		maxDuration     = math.MaxInt64
-		minLambdaPShift = 1000 // 1 second.
+		maxDuration  = math.MaxInt64
+		minSendShift = 1000 // 1 second.
 	)
 
-	lambdaP := 0.00001
-	lambdaPShift := uint64(60000)
-	maxInterval := uint64(rand.ExpQuantile(lambdaP, 0.99999))
+	// Intentionally use super conservative values for the send scheduling
+	// if the PKI happens to not specify any.
+	sendLambda := 0.00001
+	sendShift := uint64(60000)
+	sendMaxInterval := uint64(rand.ExpQuantile(sendLambda, 0.99999))
+
 	mRng := rand.NewMath()
-	isConnected := false
 	wakeInterval := time.Duration(maxDuration)
 	timer := time.NewTimer(wakeInterval)
 	defer timer.Stop()
 
+	var isConnected bool
 	for {
 		var timerFired bool
 		var qo workerOp
@@ -100,23 +103,23 @@ func (a *Account) worker() {
 					}
 				}
 			case *opNewDocument:
-				// Update lambdaP parameters from the PKI document.
-				if newLambdaP := op.doc.LambdaP; newLambdaP != lambdaP {
-					a.log.Debugf("Updated lambdaP: %v", newLambdaP)
-					lambdaP = newLambdaP
+				// Update the Send[Lambda,Shift,MaxInterval] parameters from
+				// the PKI document.
+				if newSendLambda := op.doc.SendLambda; newSendLambda != sendLambda {
+					a.log.Debugf("Updated SendLambda: %v", newSendLambda)
+					sendLambda = newSendLambda
 				}
-				if newLambdaPShift := op.doc.LambdaPShift; newLambdaPShift != lambdaPShift {
-					if newLambdaPShift < minLambdaPShift {
-						a.log.Debugf("Ignoring pathologically small lambdaPShift: %v", newLambdaPShift)
+				if newSendShift := op.doc.SendShift; newSendShift != sendShift {
+					if newSendShift < minSendShift {
+						a.log.Debugf("Ignoring pathologically small SendShift: %v", newSendShift)
 					} else {
-						a.log.Debugf("Updated lambdaPShift: %v", newLambdaPShift)
-						lambdaPShift = newLambdaPShift
+						a.log.Debugf("Updated SendShift: %v", newSendShift)
+						sendShift = newSendShift
 					}
 				}
-
-				if newMaxInterval := op.doc.MaxInterval; newMaxInterval != maxInterval {
-					a.log.Debugf("Updated maxInterval: %v", newMaxInterval)
-					maxInterval = newMaxInterval
+				if newSendMaxInterval := op.doc.SendMaxInterval; newSendMaxInterval != sendMaxInterval {
+					a.log.Debugf("Updated SendMaxInterval: %v", newSendMaxInterval)
+					sendMaxInterval = newSendMaxInterval
 				}
 			default:
 				a.log.Warningf("BUG: Worker received nonsensical op: %T", op)
@@ -133,13 +136,13 @@ func (a *Account) worker() {
 			//   and sent, or a drop cover message is sent in case the
 			//   buffer is empty. Thus, from an adversarial perspective,
 			//   there is always traffic emitted modeled by Pois(lambdaP).
-			wakeMsec := uint64(rand.Exp(mRng, lambdaP))
+			wakeMsec := uint64(rand.Exp(mRng, sendLambda))
 			switch {
-			case wakeMsec > maxInterval:
-				wakeMsec = maxInterval
+			case wakeMsec > sendMaxInterval:
+				wakeMsec = sendMaxInterval
 			default:
 			}
-			wakeMsec += lambdaPShift
+			wakeMsec += sendShift // Sample, clamp, then shift.
 
 			wakeInterval = time.Duration(wakeMsec) * time.Millisecond
 			a.log.Debugf("wakeInterval: %v", wakeInterval)
