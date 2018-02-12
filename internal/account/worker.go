@@ -38,11 +38,12 @@ type opNewDocument struct {
 
 func (a *Account) worker() {
 	const (
-		maxDuration = math.MaxInt64
-		minInterval = 1000 // 1000 ms
+		maxDuration     = math.MaxInt64
+		minLambdaPShift = 1000 // 1 second.
 	)
 
 	lambdaP := 0.00001
+	lambdaPShift := uint64(60000)
 	maxInterval := uint64(rand.ExpQuantile(lambdaP, 0.99999))
 	mRng := rand.NewMath()
 	isConnected := false
@@ -99,16 +100,21 @@ func (a *Account) worker() {
 					}
 				}
 			case *opNewDocument:
-				// Update the idea of lambdaP from the PKI document.
+				// Update lambdaP parameters from the PKI document.
 				if newLambdaP := op.doc.LambdaP; newLambdaP != lambdaP {
 					a.log.Debugf("Updated lambdaP: %v", newLambdaP)
 					lambdaP = newLambdaP
 				}
-				if newMaxInterval := op.doc.MaxInterval; newMaxInterval != maxInterval {
-					if newMaxInterval < minInterval {
-						a.log.Debugf("Ignoring pathologically small maxInterval: %v", newMaxInterval)
-						continue
+				if newLambdaPShift := op.doc.LambdaPShift; newLambdaPShift != lambdaPShift {
+					if newLambdaPShift < minLambdaPShift {
+						a.log.Debugf("Ignoring pathologically small lambdaPShift: %v", newLambdaPShift)
+					} else {
+						a.log.Debugf("Updated lambdaPShift: %v", newLambdaPShift)
+						lambdaPShift = newLambdaPShift
 					}
+				}
+
+				if newMaxInterval := op.doc.MaxInterval; newMaxInterval != maxInterval {
 					a.log.Debugf("Updated maxInterval: %v", newMaxInterval)
 					maxInterval = newMaxInterval
 				}
@@ -127,14 +133,16 @@ func (a *Account) worker() {
 			//   and sent, or a drop cover message is sent in case the
 			//   buffer is empty. Thus, from an adversarial perspective,
 			//   there is always traffic emitted modeled by Pois(lambdaP).
-			wakeMsec := uint64(rand.Exp(mRng, lambdaP)) + minInterval
+			wakeMsec := uint64(rand.Exp(mRng, lambdaP))
 			switch {
 			case wakeMsec > maxInterval:
 				wakeMsec = maxInterval
 			default:
 			}
+			wakeMsec += lambdaPShift
 
 			wakeInterval = time.Duration(wakeMsec) * time.Millisecond
+			a.log.Debugf("wakeInterval: %v", wakeInterval)
 		} else {
 			wakeInterval = maxDuration
 		}
