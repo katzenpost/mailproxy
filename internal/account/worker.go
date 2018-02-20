@@ -137,7 +137,6 @@ func (a *Account) worker() {
 					hasLoopService = false
 				} else {
 					a.log.Debugf("Provider has loop service: '%v'", ep)
-					// FUCK
 					hasLoopService = true
 				}
 
