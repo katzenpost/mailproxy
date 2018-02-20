@@ -41,11 +41,12 @@ type Account struct {
 	sync.Mutex
 	s *Store
 
-	log       *logging.Logger
-	db        *bolt.DB
-	authority *authority.Authority
-	client    *minclient.Client
-	clientCfg *minclient.ClientConfig
+	log                *logging.Logger
+	db                 *bolt.DB
+	nonvotingAuthority *authority.Authority
+	votingAuthority    *authority.Authority
+	client             *minclient.Client
+	clientCfg          *minclient.ClientConfig
 
 	linkKey     *ecdh.PrivateKey
 	identityKey *ecdh.PrivateKey
@@ -107,9 +108,13 @@ func (a *Account) doCleanup() {
 		a.client.Shutdown()
 		a.client = nil
 	}
-	if a.authority != nil {
-		a.authority.Deref()
-		a.authority = nil
+	if a.nonvotingAuthority != nil {
+		a.nonvotingAuthority.Deref()
+		a.nonvotingAuthority = nil
+	}
+	if a.votingAuthority != nil {
+		a.votingAuthority.Deref()
+		a.votingAuthority = nil
 	}
 	if a.db != nil {
 		a.db.Sync()
@@ -271,11 +276,21 @@ func (s *Store) newAccount(id string, cfg *config.Account, pCfg *proxy.Config) (
 	}
 
 	var err error
-	a.authority, err = s.authorities.Get(cfg.Authority)
+	a.nonvotingAuthority, err = s.authorities.Get(cfg.NonvotingAuthority)
 	if err != nil {
 		return nil, err
 	}
-	a.clientCfg.PKIClient = a.authority.Client()
+	a.votingAuthority, err = s.authorities.Get(cfg.VotingAuthority)
+	if err != nil {
+		return nil, err
+	}
+
+	if a.nonvotingAuthority != nil {
+		a.clientCfg.PKIClient = a.nonvotingAuthority.Client()
+	}
+	if a.votingAuthority != nil {
+		a.clientCfg.PKIClient = a.votingAuthority.Client()
+	}
 
 	a.client, err = minclient.New(a.clientCfg)
 	if err != nil {

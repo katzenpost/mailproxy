@@ -46,12 +46,13 @@ type Proxy struct {
 	logBackend *log.Backend
 	log        *logging.Logger
 
-	accounts     *account.Store
-	authorities  *authority.Store
-	recipients   *recipient.Store
-	popListener  *popListener
-	smtpListener *smtpListener
-	management   *thwack.Server
+	accounts             *account.Store
+	votingAuthorities    *authority.Store
+	nonvotingAuthorities *authority.Store
+	recipients           *recipient.Store
+	popListener          *popListener
+	smtpListener         *smtpListener
+	management           *thwack.Server
 
 	fatalErrCh chan error
 	eventCh    channels.Channel
@@ -112,9 +113,11 @@ func (p *Proxy) halt() {
 		p.accounts = nil
 	}
 
-	if p.authorities != nil {
-		p.authorities.Reset()
-		p.authorities = nil
+	if p.nonvotingAuthorities != nil || p.votingAuthorities != nil {
+		p.nonvotingAuthorities.Reset()
+		p.nonvotingAuthorities = nil
+		p.votingAuthorities.Reset()
+		p.votingAuthorities = nil
 	}
 
 	p.Halt()
@@ -198,9 +201,18 @@ func New(cfg *config.Config) (*Proxy, error) {
 	}
 
 	// Bring the authority cache online.
-	p.authorities = authority.NewStore(p.logBackend, p.cfg.UpstreamProxyConfig())
-	for k, v := range p.cfg.AuthorityMap() {
-		if err = p.authorities.Set(k, v); err != nil {
+	p.votingAuthorities = authority.NewStore(p.logBackend, p.cfg.UpstreamProxyConfig())
+	for k, v := range p.cfg.VotingAuthorityMap() {
+		if err = p.votingAuthorities.Set(k, v); err != nil {
+			p.log.Errorf("Failed to add authority '%v' to store: %v", k, err)
+			return nil, err
+		}
+		p.log.Debugf("Added authority '%v'.", k)
+	}
+
+	p.nonvotingAuthorities = authority.NewStore(p.logBackend, p.cfg.UpstreamProxyConfig())
+	for k, v := range p.cfg.NonvotingAuthorityMap() {
+		if err = p.nonvotingAuthorities.Set(k, v); err != nil {
 			p.log.Errorf("Failed to add authority '%v' to store: %v", k, err)
 			return nil, err
 		}
@@ -264,8 +276,12 @@ func (g *proxyGlue) LogBackend() *log.Backend {
 	return g.p.logBackend
 }
 
-func (g *proxyGlue) Authorities() *authority.Store {
-	return g.p.authorities
+func (g *proxyGlue) NonvotingAuthorities() *authority.Store {
+	return g.p.nonvotingAuthorities
+}
+
+func (g *proxyGlue) VotingAuthorities() *authority.Store {
+	return g.p.votingAuthorities
 }
 
 func (g *proxyGlue) EventCh() chan<- interface{} {

@@ -28,7 +28,8 @@ import (
 type ProxyInternals interface {
 	Config() *config.Config
 	LogBackend() *log.Backend
-	Authorities() *authority.Store
+	VotingAuthorities() *authority.Store
+	NonvotingAuthorities() *authority.Store
 	EventCh() chan<- interface{}
 	FatalErrCh() chan<- error
 }
