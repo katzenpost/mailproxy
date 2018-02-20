@@ -244,9 +244,12 @@ func (p *Proxy) IsConnected(accountID string) bool {
 // ListProviders returns a list of Provider identifiers published for the
 // current epoch by the authority identified by authorityID.
 func (p *Proxy) ListProviders(authorityID string) ([]*pki.MixDescriptor, error) {
-	authority, err := p.authorities.Get(authorityID)
+	authority, err := p.nonvotingAuthorities.Get(authorityID)
 	if err != nil {
-		return nil, err
+		authority, err = p.votingAuthorities.Get(authorityID)
+		if err != nil {
+			return nil, err
+		}
 	}
 	defer authority.Deref()
 

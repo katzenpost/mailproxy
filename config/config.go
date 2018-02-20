@@ -28,6 +28,8 @@ import (
 
 	"github.com/BurntSushi/toml"
 	nvClient "github.com/katzenpost/authority/nonvoting/client"
+	vClient "github.com/katzenpost/authority/voting/client"
+	vServerConfig "github.com/katzenpost/authority/voting/server/config"
 	"github.com/katzenpost/core/crypto/ecdh"
 	"github.com/katzenpost/core/crypto/eddsa"
 	"github.com/katzenpost/core/log"
@@ -198,6 +200,62 @@ func (dCfg *Debug) applyDefaults() {
 	}
 }
 
+type VotingPeer struct {
+	// Address is the IP address/port combination of the authority.
+	Addresses []string
+
+	// IdentityPublicKey is the authority's signing public key.
+	IdentityPublicKey *eddsa.PublicKey
+
+	// LinkPublicKey is the authority's link layer public key.
+	LinkPublicKey *eddsa.PublicKey
+}
+
+func (peer *VotingPeer) validate() error {
+	if len(peer.Addresses) == 0 {
+		return errors.New("Addresses must be specified.")
+	}
+	for _, addr := range peer.Addresses {
+		if err := utils.EnsureAddrIPPort(addr); err != nil {
+			return fmt.Errorf("Address '%v' is invalid: %v", addr, err)
+		}
+	}
+	if peer.IdentityPublicKey == nil {
+		return fmt.Errorf("Identity PublicKey is missing")
+	}
+	if peer.LinkPublicKey == nil {
+		return fmt.Errorf("Link PublicKey is missing")
+	}
+	return nil
+}
+
+type VotingAuthority struct {
+	Peers []*vServerConfig.AuthorityPeer
+}
+
+// New constructs a pki.Client with the specified non-voting authority config.
+func (vACfg *VotingAuthority) New(l *log.Backend, pCfg *proxy.Config) (pki.Client, error) {
+	cfg := &vClient.Config{
+		LogBackend:    l,
+		Authorities:   vACfg.Peers,
+		DialContextFn: pCfg.ToDialContext("voting"),
+	}
+	return vClient.New(cfg)
+}
+
+func (vACfg *VotingAuthority) validate() error {
+	if vACfg.Peers == nil || len(vACfg.Peers) == 0 {
+		return errors.New("VotingAuthority failure, must specify at least one peer.")
+	}
+	for _, peer := range vACfg.Peers {
+		err := peer.Validate()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // NonvotingAuthority is a non-voting authority configuration.
 type NonvotingAuthority struct {
 	// Address is the IP address/port combination of the authority.
@@ -236,8 +294,11 @@ type Account struct {
 	// ProviderKeyPin is the optional pinned provider signing key.
 	ProviderKeyPin *eddsa.PublicKey
 
-	// Authority is the authority configuration used by this Account.
-	Authority string
+	// VotingAuthority is the authority configuration used by this Account.
+	VotingAuthority string
+
+	// NonvotingAuthority is the authority configuration used by this Account.
+	NonvotingAuthority string
 
 	// LinkKey is the Provider authentication key used by this Account.
 	LinkKey *ecdh.PrivateKey `toml:"-"`
@@ -283,8 +344,10 @@ func (accCfg *Account) validate(cfg *Config) error {
 	if accCfg.Provider == "" {
 		return fmt.Errorf("Provider is missing")
 	}
-	if _, ok := cfg.authorities[accCfg.Authority]; !ok {
-		return fmt.Errorf("non-existent Authority '%v'", accCfg.Authority)
+	_, aok := cfg.nonvotingAuthorities[accCfg.NonvotingAuthority]
+	_, bok := cfg.votingAuthorities[accCfg.VotingAuthority]
+	if !aok && !bok {
+		return fmt.Errorf("non-existent Voting/Nonvoting Authority")
 	}
 	return nil
 }
@@ -363,12 +426,14 @@ type Config struct {
 	Debug         *Debug
 
 	NonvotingAuthority map[string]*NonvotingAuthority
+	VotingAuthority    map[string]*VotingAuthority
 	Account            []*Account
 	Recipients         map[string]*ecdh.PublicKey `toml:"-"`
 
-	authorities   map[string]authority.Factory
-	accounts      map[string]*Account
-	upstreamProxy *proxy.Config
+	nonvotingAuthorities map[string]authority.Factory
+	votingAuthorities    map[string]authority.Factory
+	accounts             map[string]*Account
+	upstreamProxy        *proxy.Config
 
 	// StrRecipients exists entirely to work around a bug in the toml library,
 	// and should not be used by anything external to this package.
@@ -379,8 +444,14 @@ type Config struct {
 
 // AuthorityMap returns the identifier->authority.Factory mapping specified in
 // the Config.
-func (cfg *Config) AuthorityMap() map[string]authority.Factory {
-	return cfg.authorities
+func (cfg *Config) VotingAuthorityMap() map[string]authority.Factory {
+	return cfg.votingAuthorities
+}
+
+// NonvotingAuthorityMap returns the identifier->authority.Factory mapping specified in
+// the Config.
+func (cfg *Config) NonvotingAuthorityMap() map[string]authority.Factory {
+	return cfg.nonvotingAuthorities
 }
 
 // AccountMap returns the account identifier->Account mapping specified in the
@@ -424,7 +495,8 @@ func (cfg *Config) FixupAndValidate() error {
 	if cfg.StrRecipients == nil {
 		cfg.StrRecipients = make(map[string]string)
 	}
-	cfg.authorities = make(map[string]authority.Factory)
+	cfg.nonvotingAuthorities = make(map[string]authority.Factory)
+	cfg.votingAuthorities = make(map[string]authority.Factory)
 	cfg.accounts = make(map[string]*Account)
 
 	// Validate/fixup the various sections.
@@ -446,10 +518,19 @@ func (cfg *Config) FixupAndValidate() error {
 		if err := v.validate(); err != nil {
 			return fmt.Errorf("config: NonvotingAuthority '%v' is invalid: %v", k, err)
 		}
-		if _, ok := cfg.authorities[k]; ok {
+		if _, ok := cfg.votingAuthorities[k]; ok {
 			return fmt.Errorf("config: Authority '%v' is defined multiple times", k)
 		}
-		cfg.authorities[k] = v
+		cfg.nonvotingAuthorities[k] = v
+	}
+	for k, v := range cfg.VotingAuthority {
+		if err := v.validate(); err != nil {
+			return fmt.Errorf("config: NonvotingAuthority '%v' is invalid: %v", k, err)
+		}
+		if _, ok := cfg.votingAuthorities[k]; ok {
+			return fmt.Errorf("config: Authority '%v' is defined multiple times", k)
+		}
+		cfg.votingAuthorities[k] = v
 	}
 	for idx, v := range cfg.Account {
 		if err := v.fixup(cfg); err != nil {
