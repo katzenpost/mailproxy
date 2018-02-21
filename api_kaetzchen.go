@@ -35,6 +35,9 @@ const (
 	keyserverStatusOk          = 0
 	keyserverStatusSyntaxError = 1
 	keyserverStatusNoIdentity  = 2
+
+	tetherService = "tether"
+	tetherVersion = 0
 )
 
 var (
@@ -119,6 +122,57 @@ func (p *Proxy) onQueryRecipient(c *thwack.Conn, l string) error {
 	}
 
 	return c.Writer().PrintfLine("%v %v", thwack.StatusOk, hex.EncodeToString(tag))
+}
+
+type tetherRequest struct {
+	Version      int
+	User         string
+	Authenticate string
+	Command      string
+	Sequence     int
+}
+
+type tetherResponse struct {
+	Version    int
+	StatusCode int
+	QueueHint  int
+	Sequence   int
+	Payload    string
+}
+
+func (p *Proxy) genTetherAuthToken() (string, error) {
+	return "", nil // XXX fix me
+}
+
+// GetTetherMessage retreives a message from a remote Provider,
+// specified recipient and returns the message identifier tag.
+func (p *Proxy) GetTetherMessage(senderID, remoteID string, sequence int) ([]byte, error) {
+	_, user, provider, err := p.recipients.Normalize(remoteID)
+	if err != nil {
+		return nil, err
+	}
+
+	authToken, err := p.genTetherAuthToken()
+	if err != nil {
+		return nil, err
+	}
+	var req = tetherRequest{
+		Version:      keyserverVersion,
+		User:         user,
+		Authenticate: authToken,
+		Command:      "retrieve",
+		Sequence:     0,
+	}
+
+	var out []byte
+	enc := codec.NewEncoderBytes(&out, &jsonHandle)
+	err = enc.Encode(req)
+	if err != nil {
+		p.log.Errorf("GetTetherMessage failed to encode kaetzchen message: %s", err)
+		return nil, err
+	}
+
+	return p.SendKaetzchenRequest(senderID, tetherService, provider, out, true)
 }
 
 func keyserverStatusCodeToErr(statusCode int) error {
