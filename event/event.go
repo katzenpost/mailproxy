@@ -47,6 +47,28 @@ func (e *ConnectionStatusEvent) String() string {
 	return fmt.Sprintf("ConnectionStatus[%v]: %v", e.AccountID, e.IsConnected)
 }
 
+// MessageSentEvent is the event sent when a message has been fully transmitted.
+type MessageSentEvent struct {
+	// AccountID is the account identifier for the account associated with
+	// the event.
+	AccountID string
+
+	// MessageID is the local unique identifier for the message, generated
+	// when the message was enqueued.
+	MessageID []byte
+
+	// Err is the error encountered when sending the message if any.
+	Err error
+}
+
+// String returns a string representation of a MessageSentEvent.
+func (e *MessageSentEvent) String() string {
+	if e.Err != nil {
+		return fmt.Sprintf("MessageSent[%v]: %v failed: %v", e.AccountID, hex.EncodeToString(e.MessageID), e.Err)
+	}
+	return fmt.Sprintf("MessageSent[%v]: %v", e.AccountID, hex.EncodeToString(e.MessageID))
+}
+
 // MessageReceivedEvent is the event sent when a new message is received.
 type MessageReceivedEvent struct {
 	// AccountID is the account identifier for the account associated with

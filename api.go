@@ -42,37 +42,35 @@ var (
 )
 
 // SendMessage enqueues payload for transmission from the sender to the
-// recipient (account IDs).  The payload MUST be a well formed IMF message.
+// recipient (account IDs), and returns he message identifier tag.  The
+// payload MUST be a well formed IMF message.
 //
 // Any delivery failures after the message has been successfully enqueued will
 // result in a delivery status notification message being sent from the
 // postmaster to the senderID account.
-func (p *Proxy) SendMessage(senderID, recipientID string, payload []byte) error {
+func (p *Proxy) SendMessage(senderID, recipientID string, payload []byte) ([]byte, error) {
 	acc, _, err := p.getAccount(senderID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer acc.Deref()
 
 	rcpt, err := p.toAccountRecipient(recipientID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if rcpt.PublicKey == nil {
-		return ErrUnknownRecipient
+		return nil, ErrUnknownRecipient
 	}
 
 	// Validate and pre-process the outgoing message body.
 	payloadIMF, _, isUnreliable, err := p.preprocessOutgoing(payload, true)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Enqueue the outgoing message.
-	if err = acc.EnqueueMessage(rcpt, payloadIMF, isUnreliable); err != nil {
-		return err
-	}
-	return nil
+	return acc.EnqueueMessage(rcpt, payloadIMF, isUnreliable)
 }
 
 func (p *Proxy) toAccountRecipient(recipientID string) (*account.Recipient, error) {

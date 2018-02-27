@@ -177,17 +177,17 @@ func (sc *surbCtx) fromBucket(bkt *bolt.Bucket) error {
 }
 
 // EnqueueMessage enqueues a message for transmission.
-func (a *Account) EnqueueMessage(recipient *Recipient, msg []byte, isUnreliable bool) error {
+func (a *Account) EnqueueMessage(recipient *Recipient, msg []byte, isUnreliable bool) ([]byte, error) {
 	// Generate a distinct message ID for this message.
 	var msgID [block.MessageIDLength]byte
 	if _, err := io.ReadFull(rand.Reader, msgID[:]); err != nil {
-		return err
+		return nil, err
 	}
 
 	// Fragment and encrypt the messages into ciphertexts.
 	blocks, err := block.EncryptMessage(&msgID, msg, a.identityKey, recipient.PublicKey)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Append to the send queue.
@@ -226,11 +226,11 @@ func (a *Account) EnqueueMessage(recipient *Recipient, msg []byte, isUnreliable 
 		_, err = msgBkt.CreateBucketIfNotExists([]byte(surbETAsBucket))
 		return err
 	}); err != nil {
-		return err
+		return nil, err
 	}
 
 	a.log.Debugf("Message [%v](->%v): Enqueued %d blocks.", hex.EncodeToString(msgID[:]), recipient.ID, len(blocks))
-	return nil
+	return msgID[:], nil
 }
 
 // EnqueueKaetzchenRequest enqueues a Katzchen request for transmission.
@@ -721,7 +721,7 @@ func (a *Account) onSURB(surbID *[sConstants.SURBIDLength]byte, payload []byte) 
 			// surbTypeKaetzchen, but not if it is a internal Kaetzchen
 			// query.
 			if ctx.surbType == surbTypeKaetzchen {
-				a.onKaezchenComplete(ctx.messageID[:], nil, errInvalidReply)
+				a.onKaetzchenComplete(ctx.messageID[:], nil, errInvalidReply)
 			}
 			return nil
 		}
@@ -740,7 +740,7 @@ func (a *Account) onSURB(surbID *[sConstants.SURBIDLength]byte, payload []byte) 
 			// Validate the reserved field.
 			if plaintext[1] != 0 {
 				a.log.Warningf("Discarding Kaetzchen SURB %v: Malformed payload.", idStr)
-				a.onKaezchenComplete(ctx.messageID[:], nil, errInvalidReply)
+				a.onKaetzchenComplete(ctx.messageID[:], nil, errInvalidReply)
 				return nil
 			}
 
@@ -749,7 +749,7 @@ func (a *Account) onSURB(surbID *[sConstants.SURBIDLength]byte, payload []byte) 
 
 			if ctx.surbType == surbTypeKaetzchen {
 				// Pass the reply to the user, omitting the reply header.
-				a.onKaezchenComplete(ctx.messageID[:], plaintext[2:], nil)
+				a.onKaetzchenComplete(ctx.messageID[:], plaintext[2:], nil)
 			}
 		default:
 			a.log.Warningf("Discarding SURB %v: Unknown type: 0x%02x", idStr, ctx.surbType)
@@ -794,6 +794,11 @@ func (a *Account) onACK(idStr string, sendBkt *bolt.Bucket, ack *surbCtx, isSynt
 		a.log.Debugf("Message [%v]: Fully ACKed by peer.", msgIDStr)
 		spoolBkt.DeleteBucket(msgSeq)
 		a.resetSpoolSeq(spoolBkt)
+
+		a.s.eventCh <- &event.MessageSentEvent{
+			AccountID: a.id,
+			MessageID: ack.messageID[:],
+		}
 		return
 	}
 
@@ -844,7 +849,7 @@ func (a *Account) doSendGC() {
 						// ACKed.  Send a completion event notifing the
 						// caller of the failure.
 						msgID := copyOutBytes(surbBkt.Get([]byte(messageIDKey)))
-						a.onKaezchenComplete(msgID, nil, errReplyTimeout)
+						a.onKaetzchenComplete(msgID, nil, errReplyTimeout)
 					default:
 					}
 				}
@@ -884,7 +889,8 @@ func (a *Account) doSendGC() {
 			} else {
 				msgsBounced++
 
-				msgIDStr := hex.EncodeToString(msgBkt.Get([]byte(messageIDKey)))
+				msgID := copyOutBytes(msgBkt.Get([]byte(messageIDKey)))
+				msgIDStr := hex.EncodeToString(msgID)
 				addr := string(msgBkt.Get([]byte(userKey))) + "@" + string(msgBkt.Get([]byte(providerKey)))
 				a.log.Errorf("Message [%v](->%v): Delivery timed out", msgIDStr, addr)
 
@@ -893,6 +899,12 @@ func (a *Account) doSendGC() {
 					a.storeMessage(recvBkt, nil, report)
 				} else {
 					a.log.Errorf("Failed to generate a report: %v", err)
+				}
+
+				a.s.eventCh <- &event.MessageSentEvent{
+					AccountID: a.id,
+					MessageID: msgID,
+					Err:       errSendTimeout,
 				}
 			}
 			if bounce || zombie {
@@ -917,7 +929,7 @@ func (a *Account) doSendGC() {
 					// failure.
 					msgID := copyOutBytes(msgBkt.Get([]byte(messageIDKey)))
 
-					a.onKaezchenComplete(msgID, nil, errSendTimeout)
+					a.onKaetzchenComplete(msgID, nil, errSendTimeout)
 
 					urgentMsgsBounced++
 					cur.Delete()
@@ -938,7 +950,7 @@ func (a *Account) doSendGC() {
 	a.lastSendGC = now
 }
 
-func (a *Account) onKaezchenComplete(msgID, payload []byte, err error) {
+func (a *Account) onKaetzchenComplete(msgID, payload []byte, err error) {
 	a.s.eventCh <- &event.KaetzchenReplyEvent{
 		AccountID: a.id,
 		MessageID: msgID,

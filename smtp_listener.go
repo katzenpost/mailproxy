@@ -221,7 +221,7 @@ func (s *smtpSession) onGotData(env *smtpEnvelope, b []byte, viaESMTP bool) erro
 	var enqueued []string
 	for _, recipient := range env.recipients {
 		// Add the message to the send queue.
-		if err = env.account.EnqueueMessage(recipient, payload, isUnreliable); err != nil {
+		if _, err = env.account.EnqueueMessage(recipient, payload, isUnreliable); err != nil {
 			s.log.Errorf("Failed to enqueue for '%v': %v", recipient, err)
 			failed[recipient.ID] = err
 			continue
