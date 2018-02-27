@@ -116,10 +116,6 @@ const (
 var (
 	errEntryGone  = errors.New("spool entry disapeared while sending")
 	errNoDocument = errors.New("no directory information available")
-
-	errSendTimeout  = errors.New("timed out attempting to send")
-	errReplyTimeout = errors.New("timed out waiting for reply")
-	errInvalidReply = errors.New("reply body was malformed")
 )
 
 // Recipient is a outgoing recipient.
@@ -721,7 +717,7 @@ func (a *Account) onSURB(surbID *[sConstants.SURBIDLength]byte, payload []byte) 
 			// surbTypeKaetzchen, but not if it is a internal Kaetzchen
 			// query.
 			if ctx.surbType == surbTypeKaetzchen {
-				a.onKaetzchenComplete(ctx.messageID[:], nil, errInvalidReply)
+				a.onKaetzchenComplete(ctx.messageID[:], nil, event.ErrInvalidReply)
 			}
 			return nil
 		}
@@ -740,7 +736,7 @@ func (a *Account) onSURB(surbID *[sConstants.SURBIDLength]byte, payload []byte) 
 			// Validate the reserved field.
 			if plaintext[1] != 0 {
 				a.log.Warningf("Discarding Kaetzchen SURB %v: Malformed payload.", idStr)
-				a.onKaetzchenComplete(ctx.messageID[:], nil, errInvalidReply)
+				a.onKaetzchenComplete(ctx.messageID[:], nil, event.ErrInvalidReply)
 				return nil
 			}
 
@@ -849,7 +845,7 @@ func (a *Account) doSendGC() {
 						// ACKed.  Send a completion event notifing the
 						// caller of the failure.
 						msgID := copyOutBytes(surbBkt.Get([]byte(messageIDKey)))
-						a.onKaetzchenComplete(msgID, nil, errReplyTimeout)
+						a.onKaetzchenComplete(msgID, nil, event.ErrReplyTimeout)
 					default:
 					}
 				}
@@ -904,7 +900,7 @@ func (a *Account) doSendGC() {
 				a.s.eventCh <- &event.MessageSentEvent{
 					AccountID: a.id,
 					MessageID: msgID,
-					Err:       errSendTimeout,
+					Err:       event.ErrSendTimeout,
 				}
 			}
 			if bounce || zombie {
@@ -929,7 +925,7 @@ func (a *Account) doSendGC() {
 					// failure.
 					msgID := copyOutBytes(msgBkt.Get([]byte(messageIDKey)))
 
-					a.onKaetzchenComplete(msgID, nil, errSendTimeout)
+					a.onKaetzchenComplete(msgID, nil, event.ErrSendTimeout)
 
 					urgentMsgsBounced++
 					cur.Delete()

@@ -20,9 +20,24 @@ package event
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 
 	"github.com/katzenpost/core/crypto/ecdh"
+)
+
+var (
+	// ErrInvalidReply is the error returned when a SURB reply payload is
+	// malformed or otherwise invalid.
+	ErrInvalidReply = errors.New("reply body is malformed")
+
+	// ErrSendTimeout is the error returned when a message timed out before
+	// being fully sent.
+	ErrSendTimeout = errors.New("timed out attempting to send")
+
+	// ErrReplyTimeout is the error returned when a Kaetzchen request timed
+	// out waiting for a reply.
+	ErrReplyTimeout = errors.New("timed out waiting for reply")
 )
 
 // Event is the generic event sent over the event listener channel.
