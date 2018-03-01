@@ -158,19 +158,19 @@ func (a *Account) initKeys(cfg *config.Account, basePath string) error {
 func (a *Account) onConn(err error) {
 	a.log.Debugf("onConn(%v)", err)
 
-	isConnected := err == nil
 	a.s.eventCh <- &event.ConnectionStatusEvent{
 		AccountID:   a.id,
-		IsConnected: isConnected,
-		Err: err,
+		IsConnected: err == nil,
+		Err:         err,
 	}
 
 	a.Lock()
 	defer a.Unlock()
 
+	wasConnected, isConnected := a.isConnected, err == nil
 	a.isConnected = isConnected
 
-	if a.refCount > 0 {
+	if a.refCount > 0 && wasConnected != a.isConnected {
 		// Wake up the worker so it can adjust it's send scheduling.
 		a.opCh <- &opConnStatusChanged{isConnected}
 	}
