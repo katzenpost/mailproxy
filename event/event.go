@@ -55,10 +55,16 @@ type ConnectionStatusEvent struct {
 
 	// IsConnected is true iff the account is connected to the provider.
 	IsConnected bool
+
+	// Err is the error encountered when connecting or by the connection if any.
+	Err error
 }
 
 // String returns a string representation of the ConnectionStatusEvent.
 func (e *ConnectionStatusEvent) String() string {
+	if !e.IsConnected {
+		return fmt.Sprintf("ConnectionStatus[%v]: %v (%v)", e.AccountID, e.IsConnected, e.Err)
+	}
 	return fmt.Sprintf("ConnectionStatus[%v]: %v", e.AccountID, e.IsConnected)
 }
 

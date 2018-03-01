@@ -155,12 +155,14 @@ func (a *Account) initKeys(cfg *config.Account, basePath string) error {
 	return err
 }
 
-func (a *Account) onConn(isConnected bool) {
-	a.log.Debugf("onConn(%v)", isConnected)
+func (a *Account) onConn(err error) {
+	a.log.Debugf("onConn(%v)", err)
 
+	isConnected := err == nil
 	a.s.eventCh <- &event.ConnectionStatusEvent{
 		AccountID:   a.id,
 		IsConnected: isConnected,
+		Err: err,
 	}
 
 	a.Lock()
