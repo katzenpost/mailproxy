@@ -213,9 +213,6 @@ func (nvACfg *NonvotingAuthority) New(l *log.Backend, pCfg *proxy.Config) (pki.C
 }
 
 func (nvACfg *NonvotingAuthority) validate() error {
-	if err := utils.EnsureAddrIPPort(nvACfg.Address); err != nil {
-		return fmt.Errorf("Address '%v' is invalid: %v", nvACfg.Address, err)
-	}
 	if nvACfg.PublicKey == nil {
 		return fmt.Errorf("PublicKey is missing")
 	}
