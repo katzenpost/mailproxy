@@ -270,6 +270,7 @@ func (s *Store) newAccount(id string, cfg *config.Account, pCfg *proxy.Config) (
 		DialContextFn:       pCfg.ToDialContext(id),
 		MessagePollInterval: time.Duration(a.s.cfg.Debug.PollingInterval) * time.Second,
 		EnableTimeSync:      false, // Be explicit about it.
+		PreferedTransports:  pCfg.PreferedTransports,
 	}
 
 	var err error

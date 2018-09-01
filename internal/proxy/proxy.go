@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/katzenpost/core/pki"
 	"github.com/katzenpost/core/utils"
 	"golang.org/x/net/proxy"
 )
@@ -47,6 +48,10 @@ var torSocks5ProcessIsolation string
 
 // Config is the proxy configuration.
 type Config struct {
+	// PreferedTransports is a list of the transports will be used to make
+	// outgoing network connections, with the most prefered first.
+	PreferedTransports []pki.Transport
+
 	// Type is the proxy type (Eg: "none"," socks5", "tor+socks5").
 	Type string
 

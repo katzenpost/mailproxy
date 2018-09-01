@@ -310,6 +310,10 @@ func (mCfg *Management) validate() error {
 
 // UpstreamProxy is the mailproxy outgoing connection proxy configuration.
 type UpstreamProxy struct {
+	// PreferedTransports is a list of the transports will be used to make
+	// outgoing network connections, with the most prefered first.
+	PreferedTransports []pki.Transport
+
 	// Type is the proxy type (Eg: "none"," socks5").
 	Type string
 
@@ -330,11 +334,12 @@ func (uCfg *UpstreamProxy) toProxyConfig() (*proxy.Config, error) {
 	// This is kind of dumb, but this is the cleanest way I can think of
 	// doing this.
 	cfg := &proxy.Config{
-		Type:     uCfg.Type,
-		Network:  uCfg.Network,
-		Address:  uCfg.Address,
-		User:     uCfg.User,
-		Password: uCfg.Password,
+		PreferedTransports: uCfg.PreferedTransports,
+		Type:               uCfg.Type,
+		Network:            uCfg.Network,
+		Address:            uCfg.Address,
+		User:               uCfg.User,
+		Password:           uCfg.Password,
 	}
 	if err := cfg.FixupAndValidate(); err != nil {
 		return nil, err
