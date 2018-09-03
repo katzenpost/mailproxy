@@ -95,6 +95,10 @@ func (a *Account) doDeref() {
 	}
 }
 
+func (a *Account) GetID() string {
+	return a.id
+}
+
 func (a *Account) doCleanup() {
 	a.Halt()
 
@@ -217,6 +221,10 @@ func (a *Account) IsConnected() bool {
 	return a.isConnected
 }
 
+func (a *Account) InsecureKeyDiscovery() bool {
+	return a.clientCfg.InsecureKeyDiscovery
+}
+
 func (s *Store) newAccount(id string, cfg *config.Account, pCfg *proxy.Config) (*Account, error) {
 	a := new(Account)
 	a.s = s
@@ -256,21 +264,22 @@ func (s *Store) newAccount(id string, cfg *config.Account, pCfg *proxy.Config) (
 
 	// Configure and bring up the minclient instance.
 	a.clientCfg = &minclient.ClientConfig{
-		User:                cfg.User,
-		Provider:            cfg.Provider,
-		ProviderKeyPin:      cfg.ProviderKeyPin,
-		LinkKey:             a.linkKey,
-		LogBackend:          s.logBackend,
-		PKIClient:           nil, // Set later.
-		OnConnFn:            a.onConn,
-		OnEmptyFn:           a.onEmpty,
-		OnMessageFn:         a.onMessage,
-		OnACKFn:             a.onSURB, // Defined in send.go.
-		OnDocumentFn:        a.onDocument,
-		DialContextFn:       pCfg.ToDialContext(id),
-		MessagePollInterval: time.Duration(a.s.cfg.Debug.PollingInterval) * time.Second,
-		EnableTimeSync:      false, // Be explicit about it.
-		PreferedTransports:  pCfg.PreferedTransports,
+		User:                 cfg.User,
+		Provider:             cfg.Provider,
+		ProviderKeyPin:       cfg.ProviderKeyPin,
+		LinkKey:              a.linkKey,
+		LogBackend:           s.logBackend,
+		PKIClient:            nil, // Set later.
+		OnConnFn:             a.onConn,
+		OnEmptyFn:            a.onEmpty,
+		OnMessageFn:          a.onMessage,
+		OnACKFn:              a.onSURB, // Defined in send.go.
+		OnDocumentFn:         a.onDocument,
+		DialContextFn:        pCfg.ToDialContext(id),
+		MessagePollInterval:  time.Duration(a.s.cfg.Debug.PollingInterval) * time.Second,
+		EnableTimeSync:       false, // Be explicit about it.
+		PreferedTransports:   pCfg.PreferedTransports,
+		InsecureKeyDiscovery: cfg.InsecureKeyDiscovery,
 	}
 
 	var err error

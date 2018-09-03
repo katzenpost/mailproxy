@@ -41,14 +41,15 @@ import (
 )
 
 const (
-	defaultPOP3Addr            = "127.0.0.1:2524"
-	defaultSMTPAddr            = "127.0.0.1:2525"
-	defaultLogLevel            = "NOTICE"
-	defaultManagementSocket    = "management_sock"
-	defaultBounceQueueLifetime = 432000 // 5 days.
-	defaultUrgentQueueLifetime = 3600   // 1 hour.
-	defaultPollingInterval     = 30     // 30 seconds.
-	defaultRetransmitSlack     = 300    // 5 minutes.
+	defaultPOP3Addr             = "127.0.0.1:2524"
+	defaultSMTPAddr             = "127.0.0.1:2525"
+	defaultLogLevel             = "NOTICE"
+	defaultManagementSocket     = "management_sock"
+	defaultBounceQueueLifetime  = 432000 // 5 days.
+	defaultUrgentQueueLifetime  = 3600   // 1 hour.
+	defaultPollingInterval      = 30     // 30 seconds.
+	defaultRetransmitSlack      = 300    // 5 minutes.
+	defaultInsecureKeyDiscovery = false  // disabled by default.
 )
 
 var defaultLogging = Logging{
@@ -247,6 +248,11 @@ type Account struct {
 
 	// StorageKey is the optional per-account database encryption key.
 	StorageKey *ecdh.PrivateKey `toml:"-"`
+
+	// InsecureKeyDiscovery enables automatic fetching of recipient keys.
+	// This option is disabled by default as mailproxy provides no UX for
+	// verifying keys.
+	InsecureKeyDiscovery bool
 }
 
 func (accCfg *Account) fixup(cfg *Config) error {
@@ -259,7 +265,9 @@ func (accCfg *Account) fixup(cfg *Config) error {
 	if err != nil {
 		return err
 	}
-
+	if !accCfg.InsecureKeyDiscovery {
+		accCfg.InsecureKeyDiscovery = defaultInsecureKeyDiscovery
+	}
 	accCfg.Provider, err = idna.Lookup.ToASCII(accCfg.Provider)
 	return err
 }
