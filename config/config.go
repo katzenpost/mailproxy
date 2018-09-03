@@ -70,6 +70,9 @@ type Proxy struct {
 	// DataDir is the absolute path to the mail proxy's state files.
 	DataDir string
 
+	// RecipientDir is the absolute path to the mail proxy's recipient files.
+	RecipientDir string
+
 	// NoLaunchListeners disables the POP3 and SMTP interfaces, which is
 	// useful if you are using mailproxy as a library rather than a
 	// stand-alone process.
@@ -85,6 +88,9 @@ func (pCfg *Proxy) applyDefaults() {
 	}
 	if pCfg.SMTPAddress == "" {
 		pCfg.SMTPAddress = defaultSMTPAddr
+	}
+	if pCfg.RecipientDir == "" {
+		pCfg.RecipientDir = filepath.Join(pCfg.DataDir, "recipients")
 	}
 }
 

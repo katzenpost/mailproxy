@@ -21,6 +21,8 @@ import (
 	"errors"
 	"fmt"
 	"net/mail"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -43,7 +45,8 @@ var (
 type Store struct {
 	sync.Mutex
 
-	recipients map[string]*ecdh.PublicKey
+	recipients   map[string]*ecdh.PublicKey
+	recipientDir string
 
 	caseSensitiveUsers bool
 }
@@ -134,6 +137,33 @@ func (s *Store) Set(r string, k *ecdh.PublicKey) error {
 	s.Lock()
 	defer s.Unlock()
 
+	// Updates or creates the on disk PEM formatted file for the provided recipient.
+	// If the file already exists, it will be silently overwritten.
+
+	rf := filepath.Join(s.recipientDir, r+".pem")
+	err = k.ToPEMFile(rf)
+	if err != nil {
+		return err
+	}
+
+	s.recipients[addr] = k
+	return nil
+}
+
+func (s *Store) LoadFromPEM(path string) error {
+	k := new(ecdh.PublicKey)
+	err := k.FromPEMFile(path)
+	if err != nil {
+		return err
+	}
+	_, f := filepath.Split(path)
+	ext := filepath.Ext(f)
+	addr, _, _, err := s.Normalize(f[:len(f)-len(ext)])
+	if err != nil {
+		return err
+	}
+	s.Lock()
+	defer s.Unlock()
 	s.recipients[addr] = k
 	return nil
 }
@@ -148,6 +178,10 @@ func (s *Store) Clear(r string) error {
 	s.Lock()
 	defer s.Unlock()
 
+	rf := filepath.Join(s.recipientDir, r, ".pem")
+	if err := os.Remove(rf); err != nil {
+		return errNoSuchRecipient
+	}
 	if _, ok := s.recipients[addr]; ok {
 		delete(s.recipients, addr)
 		return nil
@@ -241,10 +275,11 @@ func (s *Store) onListRecipients(c *thwack.Conn, l string) error {
 }
 
 // New constructs a new Store instance.
-func New(dCfg *config.Debug, t *thwack.Server) *Store {
+func New(cfg *config.Config, t *thwack.Server) *Store {
 	s := new(Store)
 	s.recipients = make(map[string]*ecdh.PublicKey)
-	s.caseSensitiveUsers = dCfg.CaseSensitiveUserIdentifiers
+	s.recipientDir = cfg.Proxy.RecipientDir
+	s.caseSensitiveUsers = cfg.Debug.CaseSensitiveUserIdentifiers
 
 	// Register management commands.
 	if t != nil {

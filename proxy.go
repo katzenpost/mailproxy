@@ -20,6 +20,7 @@ package mailproxy
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 
@@ -138,6 +139,9 @@ func New(cfg *config.Config) (*Proxy, error) {
 	if err := utils.MkDataDir(p.cfg.Proxy.DataDir); err != nil {
 		return nil, err
 	}
+	if err := utils.MkDataDir(p.cfg.Proxy.RecipientDir); err != nil {
+		return nil, err
+	}
 	if err := p.initLogging(); err != nil {
 		return nil, err
 	}
@@ -189,12 +193,17 @@ func New(cfg *config.Config) (*Proxy, error) {
 	}
 
 	// Initialize the recipient public key store.
-	p.recipients = recipient.New(p.cfg.Debug, p.management)
+	p.recipients = recipient.New(p.cfg, p.management)
 	for k, v := range p.cfg.Recipients {
 		// Failures to add recipients are non-fatal.
 		if err = p.recipients.Set(k, v); err != nil {
 			p.log.Warningf("Failed to add recipient '%v' to store: %v", k, err)
 		}
+	}
+
+	// Import recipient PEM-encoded identities
+	if err = p.ScanRecipientDir(); err != nil {
+		return nil, err
 	}
 
 	// Bring the authority cache online.
@@ -250,6 +259,24 @@ func New(cfg *config.Config) (*Proxy, error) {
 
 	isOk = true
 	return p, nil
+}
+
+// Scan the RecipientDir for PEM-encoded identities and import them into the recipient Store.
+func (p *Proxy) ScanRecipientDir() error {
+	p.log.Noticef("Scanning RecipientDir for identities.")
+	path := p.cfg.Proxy.RecipientDir
+	err := filepath.Walk(path, func(pth string, info os.FileInfo, err error) error {
+		switch pth {
+		case path:
+		default:
+			err := p.recipients.LoadFromPEM(pth)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return err
 }
 
 type proxyGlue struct {
