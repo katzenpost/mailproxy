@@ -364,3 +364,37 @@ The sender's public key was: %v
 
 	return newMultipartReport(toAddr, "Receive failure, timeout", hrStr, []message.Header{perRecipient}, p)
 }
+
+func KeyLookupSuccess(toAddr string, accountId string, identityKey *ecdh.PublicKey) ([]byte, error) {
+	const humanReadable = `This message was created automatically by the Katzenpost Mail Proxy.
+
+The SMTP to Katzenpost interface successfully requested an identity key for the following identity:
+"<%v> %v"
+
+This key has been saved in the Mail Proxy RecipientDir as %v.pem and will
+be used for future messages. You are encouraged to verify this key
+out-of-band, because the confidentiality of messages to this recipient
+depend upon it!
+`
+	keyStr := base64.StdEncoding.EncodeToString(identityKey.Bytes())
+	hrStr := fmt.Sprintf(humanReadable, accountId, keyStr, accountId)
+
+	var b bytes.Buffer
+	// Create the top level writer.
+	h := newMultipartReportHeader(toAddr, "Key Discovery")
+	mw, err := message.CreateWriter(&b, h)
+	if err != nil {
+		return nil, err
+	}
+
+	ph := make(message.Header)
+	ph.SetContentType("text/plain", nil)
+	pw, err := mw.CreatePart(ph)
+	if err != nil {
+		return nil, err
+	}
+	io.WriteString(pw, hrStr)
+	pw.Close()
+	mw.Close()
+	return b.Bytes(), nil
+}

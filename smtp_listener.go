@@ -158,6 +158,10 @@ func (l *smtpListener) eventListener() {
 					l.log.Noticef("Discovered key for %v: %v", r.recipient.ID, pubKey)
 					l.p.SetRecipient(r.recipient.ID, pubKey)
 					r.recipient.PublicKey = pubKey
+					if report, err := imf.KeyLookupSuccess(r.account.GetID(), r.recipient.ID, pubKey); err == nil {
+						r.account.StoreReport(report)
+					}
+
 					if _, err = r.account.EnqueueMessage(r.recipient, *r.payload, r.isUnreliable); err != nil {
 						r.sendIMFFailure(err)
 					}
