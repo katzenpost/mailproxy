@@ -113,6 +113,7 @@ type eventListener struct {
 
 func (l *eventListener) Halt() {
 	l.Worker.Halt()
+	close(l.enqueueLaterCh)
 }
 
 func (l *eventListener) worker() {
