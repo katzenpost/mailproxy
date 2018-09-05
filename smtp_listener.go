@@ -120,9 +120,6 @@ func (l *eventListener) worker() {
 	l.log.Debugf("Listening for events now")
 	// set up state for queuing messages to send later
 	sendLater := make(map[string]*enqueueLater)
-	l.p.cfg.Proxy.EventSink = make(chan event.Event)
-	l.p.initializeEventSink()
-	l.enqueueLaterCh = make(chan *enqueueLater)
 	wakeup := func() <-chan time.Time {
 		return time.After(1 * time.Minute)
 	}
@@ -204,6 +201,7 @@ func newEventListener(p *Proxy) (*eventListener, error) {
 	l := new(eventListener)
 	l.p = p
 	l.log = p.logBackend.GetLogger("listener/EventSink")
+	l.enqueueLaterCh = make(chan *enqueueLater)
 	l.Go(l.worker)
 	return l, nil
 }

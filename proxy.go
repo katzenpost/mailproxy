@@ -104,11 +104,6 @@ func (p *Proxy) halt() {
 		p.smtpListener = nil
 	}
 
-	if p.eventListener != nil {
-		p.eventListener.Halt()
-		p.eventListener = nil
-	}
-
 	if p.management != nil {
 		p.management.Halt()
 		p.management = nil
@@ -125,6 +120,12 @@ func (p *Proxy) halt() {
 	}
 
 	p.Halt()
+
+	if p.eventListener != nil {
+		p.eventListener.Halt()
+		p.eventListener = nil
+	}
+
 	close(p.fatalErrCh)
 
 	p.log.Noticef("Shutdown complete.")
