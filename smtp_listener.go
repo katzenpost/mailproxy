@@ -52,7 +52,6 @@ type smtpListener struct {
 
 	connID uint64
 
-	enqueueLaterCh chan *enqueueLater
 }
 
 func (l *smtpListener) Halt() {
@@ -103,7 +102,20 @@ func (e *enqueueLater) sendIMFFailure(err error) {
 	}
 }
 
-func (l *smtpListener) eventListener() {
+type eventListener struct {
+	worker.Worker
+
+	p *Proxy
+	log *logging.Logger
+
+	enqueueLaterCh chan *enqueueLater
+}
+
+func (l *eventListener) Halt() {
+	l.Worker.Halt()
+}
+
+func (l *eventListener) worker() {
 	l.log.Debugf("Listening for events now")
 	// set up state for queuing messages to send later
 	sendLater := make(map[string]*enqueueLater)
@@ -187,6 +199,14 @@ func (l *smtpListener) onNewConn(conn net.Conn) error {
 	return nil
 }
 
+func newEventListener(p *Proxy) (*eventListener, error) {
+	l := new(eventListener)
+	l.p = p
+	l.log = p.logBackend.GetLogger("listener/EventSink")
+	l.Go(l.worker)
+	return l, nil
+}
+
 func newSMTPListener(p *Proxy) (*smtpListener, error) {
 	l := new(smtpListener)
 	l.p = p
@@ -199,7 +219,6 @@ func newSMTPListener(p *Proxy) (*smtpListener, error) {
 	}
 
 	l.Go(l.worker)
-	l.Go(l.eventListener)
 	return l, nil
 }
 
@@ -326,7 +345,7 @@ func (s *smtpSession) onGotData(env *smtpEnvelope, b []byte, viaESMTP bool) erro
 			}
 			// defer this message to be sent later
 			expire := time.Now().Add(time.Duration(s.l.p.cfg.Debug.UrgentQueueLifetime) * time.Second)
-			s.l.enqueueLaterCh <- &enqueueLater{string(msgID), env.account, recipient, &payload, entity, isUnreliable, expire}
+			s.l.p.eventListener.enqueueLaterCh <- &enqueueLater{string(msgID), env.account, recipient, &payload, entity, isUnreliable, expire}
 		} else {
 			if _, err = env.account.EnqueueMessage(recipient, payload, isUnreliable); err != nil {
 				s.log.Errorf("Failed to enqueue for '%v': %v", recipient, err)

@@ -52,6 +52,7 @@ type Proxy struct {
 	recipients   *recipient.Store
 	popListener  *popListener
 	smtpListener *smtpListener
+	eventListener *eventListener
 	management   *thwack.Server
 
 	fatalErrCh chan error
@@ -101,6 +102,11 @@ func (p *Proxy) halt() {
 	if p.smtpListener != nil {
 		p.smtpListener.Halt()
 		p.smtpListener = nil
+	}
+
+	if p.eventListener != nil {
+		p.eventListener.Halt()
+		p.eventListener = nil
 	}
 
 	if p.management != nil {
@@ -243,6 +249,11 @@ func New(cfg *config.Config) (*Proxy, error) {
 		if p.smtpListener, err = newSMTPListener(p); err != nil {
 			p.log.Errorf("Failed to start SMTP listener: %v", err)
 			return nil, err
+		}
+
+		// Bring the EventSink listener online.
+		if p.eventListener, err = newEventListener(p); err != nil {
+			p.log.Errorf("Failed to start EventSink listener: %v", err)
 		}
 	} else {
 		p.log.Debugf("Skipping POP3/SMTP listener initialization.")
