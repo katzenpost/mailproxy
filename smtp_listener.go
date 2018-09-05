@@ -321,7 +321,7 @@ func (s *smtpSession) onGotData(env *smtpEnvelope, b []byte, viaESMTP bool) erro
 				continue
 			}
 			// defer this message to be sent later
-			expire := time.Now().Add(10 * time.Second)
+			expire := time.Now().Add(time.Duration(s.l.p.cfg.Debug.UrgentQueueLifetime))
 			s.l.enqueueLaterCh <- &enqueueLater{string(msgID), env.account, recipient, &payload, entity, isUnreliable, expire}
 		} else {
 			if _, err = env.account.EnqueueMessage(recipient, payload, isUnreliable); err != nil {
