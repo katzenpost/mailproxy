@@ -246,14 +246,15 @@ func New(cfg *config.Config) (*Proxy, error) {
 			return nil, err
 		}
 
+		// Bring the EventSink listener online.
+		p.eventListener = newEventListener(p)
+
 		// Bring the SMTP interface online.
 		if p.smtpListener, err = newSMTPListener(p); err != nil {
 			p.log.Errorf("Failed to start SMTP listener: %v", err)
 			return nil, err
 		}
 
-		// Bring the EventSink listener online.
-		p.eventListener = newEventListener(p)
 	} else {
 		p.log.Debugf("Skipping POP3/SMTP listener initialization.")
 	}
