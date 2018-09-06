@@ -164,7 +164,6 @@ func (l *eventListener) worker() {
 						delete(sendLater, kid)
 						break
 					}
-					// TODO: send an IMF recommending that the user verify the key out-of-band
 					l.log.Noticef("Discovered key for %v: %v", r.recipient.ID, pubKey)
 					l.p.SetRecipient(r.recipient.ID, pubKey)
 					r.recipient.PublicKey = pubKey
