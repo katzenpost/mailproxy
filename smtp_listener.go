@@ -111,11 +111,6 @@ type eventListener struct {
 	enqueueLaterCh chan *enqueueLater
 }
 
-func (l *eventListener) Halt() {
-	l.Worker.Halt()
-	close(l.enqueueLaterCh)
-}
-
 func (l *eventListener) worker() {
 	l.log.Debugf("Listening for events now")
 	// set up state for queuing messages to send later
@@ -128,6 +123,7 @@ func (l *eventListener) worker() {
 		select {
 		case <-l.HaltCh():
 			l.log.Debugf("Shutting down eventListener.")
+			close(l.enqueueLaterCh)
 			return
 		case t := <-wakeup():
 			l.log.Debugf("Waking up eventListener to prune messages")
