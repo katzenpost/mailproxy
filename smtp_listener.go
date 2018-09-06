@@ -146,22 +146,22 @@ func (l *eventListener) worker() {
 		case evt := <-l.p.cfg.Proxy.EventSink:
 			switch e := evt.(type) {
 			case *event.KaetzchenReplyEvent:
-				kid := string(e.MessageID)
-				if r, ok := sendLater[kid]; ok {
+				id := string(e.MessageID)
+				if r, ok := sendLater[id]; ok {
 					if e.Err != nil {
 						r.sendIMFFailure(e.Err)
-						delete(sendLater, kid)
+						delete(sendLater, id)
 						break
 					}
 					user, pubKey, err := l.p.ParseKeyQueryResponse(e.Payload)
 					if err != nil {
 						r.sendIMFFailure(err)
-						delete(sendLater, kid)
+						delete(sendLater, id)
 						break
 					}
 					if user != r.recipient.User {
 						l.log.Warningf("Keyserver responded with WRONG user, wanted %v, got %v", r.recipient.User, user)
-						delete(sendLater, kid)
+						delete(sendLater, id)
 						break
 					}
 					l.log.Noticef("Discovered key for %v: %v", r.recipient.ID, pubKey)
@@ -176,7 +176,7 @@ func (l *eventListener) worker() {
 					if _, err = r.account.EnqueueMessage(r.recipient, *r.payload, r.isUnreliable); err != nil {
 						r.sendIMFFailure(err)
 					}
-					delete(sendLater, kid)
+					delete(sendLater, id)
 				}
 			default:
 			}
