@@ -65,7 +65,7 @@ type Account struct {
 
 	isConnected bool
 	refCount    int32
-	insecureKeyDiscovery bool
+	InsecureKeyDiscovery bool
 }
 
 // Deref decrements the reference count of the Account.  If the reference count
@@ -222,14 +222,6 @@ func (a *Account) IsConnected() bool {
 	return a.isConnected
 }
 
-// InsecureKeyDiscovery returns true iff insecure key discovery is enabled
-func (a *Account) InsecureKeyDiscovery() bool {
-	a.Lock()
-	defer a.Unlock()
-
-	return a.insecureKeyDiscovery
-}
-
 func (s *Store) newAccount(id string, cfg *config.Account, pCfg *proxy.Config) (*Account, error) {
 	a := new(Account)
 	a.s = s
@@ -287,7 +279,7 @@ func (s *Store) newAccount(id string, cfg *config.Account, pCfg *proxy.Config) (
 	}
 
 	// Configure InsecureKeyDiscovery
-	a.insecureKeyDiscovery = cfg.InsecureKeyDiscovery
+	a.InsecureKeyDiscovery = cfg.InsecureKeyDiscovery
 
 	var err error
 	a.authority, err = s.authorities.Get(cfg.Authority)

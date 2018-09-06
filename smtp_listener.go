@@ -284,7 +284,7 @@ evLoop:
 					break
 				}
 				// If automatic key discovery is enabled for this account, continue.
-				if rcpt.PublicKey == nil && !env.account.InsecureKeyDiscovery() {
+				if rcpt.PublicKey == nil && !env.account.InsecureKeyDiscovery {
 					s.log.Warningf("RCPT TO ('%v') does not specify a known recipient.", rcpt.ID)
 					s.sConn.Reject()
 					break

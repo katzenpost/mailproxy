@@ -265,9 +265,6 @@ func (accCfg *Account) fixup(cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	if !accCfg.InsecureKeyDiscovery {
-		accCfg.InsecureKeyDiscovery = defaultInsecureKeyDiscovery
-	}
 	accCfg.Provider, err = idna.Lookup.ToASCII(accCfg.Provider)
 	return err
 }
