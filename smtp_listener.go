@@ -198,13 +198,13 @@ func (l *smtpListener) onNewConn(conn net.Conn) error {
 	return nil
 }
 
-func newEventListener(p *Proxy) (*eventListener, error) {
+func newEventListener(p *Proxy) (*eventListener) {
 	l := new(eventListener)
 	l.p = p
 	l.log = p.logBackend.GetLogger("listener/EventSink")
 	l.enqueueLaterCh = make(chan *enqueueLater)
 	l.Go(l.worker)
-	return l, nil
+	return l
 }
 
 func newSMTPListener(p *Proxy) (*smtpListener, error) {
