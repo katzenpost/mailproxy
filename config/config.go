@@ -41,15 +41,14 @@ import (
 )
 
 const (
-	defaultPOP3Addr             = "127.0.0.1:2524"
-	defaultSMTPAddr             = "127.0.0.1:2525"
-	defaultLogLevel             = "NOTICE"
-	defaultManagementSocket     = "management_sock"
-	defaultBounceQueueLifetime  = 432000 // 5 days.
-	defaultUrgentQueueLifetime  = 3600   // 1 hour.
-	defaultPollingInterval      = 30     // 30 seconds.
-	defaultRetransmitSlack      = 300    // 5 minutes.
-	defaultInsecureKeyDiscovery = false  // disabled by default.
+	defaultPOP3Addr            = "127.0.0.1:2524"
+	defaultSMTPAddr            = "127.0.0.1:2525"
+	defaultLogLevel            = "NOTICE"
+	defaultManagementSocket    = "management_sock"
+	defaultBounceQueueLifetime = 432000 // 5 days.
+	defaultUrgentQueueLifetime = 3600   // 1 hour.
+	defaultPollingInterval     = 30     // 30 seconds.
+	defaultRetransmitSlack     = 300    // 5 minutes.
 )
 
 var defaultLogging = Logging{
