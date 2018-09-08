@@ -22,8 +22,11 @@ import (
 	"fmt"
 	"net"
 	"sync/atomic"
+	"time"
 
+	"github.com/emersion/go-message"
 	"github.com/katzenpost/core/worker"
+	"github.com/katzenpost/mailproxy/event"
 	"github.com/katzenpost/mailproxy/internal/account"
 	"github.com/katzenpost/mailproxy/internal/imf"
 	"github.com/siebenmann/smtpd"
@@ -48,6 +51,7 @@ type smtpListener struct {
 	log *logging.Logger
 
 	connID uint64
+
 }
 
 func (l *smtpListener) Halt() {
@@ -79,6 +83,133 @@ func (l *smtpListener) worker() {
 	// NOTREACHED
 }
 
+type enqueueLater struct {
+	replyID      string
+	accID        string
+	rID          string
+	payload      *[]byte
+	entity       *message.Entity
+	isUnreliable bool
+	expire       time.Time
+}
+
+func (e *enqueueLater) sendIMFFailure(account *account.Account, err error) {
+	failed := make(map[string]error)
+	failed[e.rID] = err
+	report, err := imf.NewEnqueueFailure(e.accID, nil, failed, e.entity.Header)
+	if err == nil {
+		account.StoreReport(report)
+	}
+}
+
+type eventListener struct {
+	worker.Worker
+
+	p *Proxy
+	log *logging.Logger
+
+	enqueueLaterCh chan *enqueueLater
+	sendLater map[string]*enqueueLater
+}
+
+func (l *eventListener) onKaetzchenReply(e *event.KaetzchenReplyEvent) {
+	id := string(e.MessageID)
+	r, ok := l.sendLater[id]
+	if !ok {
+		return
+	}
+	delete(l.sendLater, id)
+	acc, _, err := l.p.getAccount(r.accID)
+	if err != nil {
+		l.log.Warningf("getAccount() failed for %v", r.accID)
+		return
+	}
+	defer acc.Deref()
+	rcpt, err := l.p.toAccountRecipient(r.rID)
+	if err != nil {
+		l.log.Warningf("toAccountRecipient() failed for %v", r.rID)
+		return
+	}
+	if e.Err != nil {
+		l.log.Warningf("KaetzchenReplyEvent received with error: %v", e.Err)
+		r.sendIMFFailure(acc, e.Err)
+		return
+	}
+	user, pubKey, err := l.p.ParseKeyQueryResponse(e.Payload)
+	if err != nil {
+		l.log.Warningf("ParseKeyQueryResponse returned %v", err)
+		r.sendIMFFailure(acc, err)
+		return
+	}
+	if user != rcpt.User {
+		l.log.Warningf("ParseKeyQueryResponse returned WRONG USER, wanted %v got %v", rcpt.User, user)
+		r.sendIMFFailure(acc, errors.New("Keyserver returned PublicKey for WRONG USER!"))
+		return
+	}
+	l.log.Noticef("Discovered key for %v: %v", r.rID, pubKey)
+	l.p.SetRecipient(r.rID, pubKey)
+	report, err := imf.KeyLookupSuccess(r.accID, r.rID, pubKey)
+	if err != nil {
+		l.log.Warningf("Failed to produce KeyLookupSuccess report: %v", err)
+		return
+	}
+	acc.StoreReport(report)
+	rcpt, err = l.p.toAccountRecipient(r.rID)
+	if  err != nil {
+		l.log.Warningf("Failed to lookup freshly discovered account: %v", err)
+		return
+	}
+	_, err = acc.EnqueueMessage(rcpt, *r.payload, r.isUnreliable)
+	if err != nil {
+		r.sendIMFFailure(acc, err)
+	}
+}
+
+func (l *eventListener) prune(t time.Time) {
+	toDel := make([]string, 0)
+	for k, r := range l.sendLater {
+		if t.After(r.expire) {
+			if acc, _, err := l.p.getAccount(r.accID); err != nil {
+				toDel = append(toDel, k)
+				r.sendIMFFailure(acc, errors.New("Unable to discover key for recipient"))
+				acc.Deref()
+			}
+		}
+	}
+	for _, d := range toDel {
+		delete(l.sendLater, d)
+	}
+}
+
+func (l *eventListener) worker() {
+	l.log.Debugf("Listening for events now")
+	// set up state for queuing messages to send later
+	l.sendLater = make(map[string]*enqueueLater)
+	wakeup := func() <-chan time.Time {
+		return time.After(1 * time.Minute)
+	}
+
+	for {
+		select {
+		case <-l.HaltCh():
+			l.log.Debugf("Shutting down eventListener.")
+			close(l.enqueueLaterCh)
+			return
+		case t := <-wakeup():
+			l.log.Debugf("Waking up eventListener to prune messages")
+			l.prune(t)
+		case msg := <-l.enqueueLaterCh:
+			l.sendLater[msg.replyID] = msg
+		case evt := <-l.p.cfg.Proxy.EventSink:
+			switch e := evt.(type) {
+			case *event.KaetzchenReplyEvent:
+				l.onKaetzchenReply(e)
+			default:
+			}
+		}
+	}
+}
+
 func (l *smtpListener) onNewConn(conn net.Conn) error {
 	l.log.Debugf("Accepted new connection: %v", conn.RemoteAddr())
 
@@ -91,6 +222,15 @@ func (l *smtpListener) onNewConn(conn net.Conn) error {
 
 	l.Go(func() { s.worker() })
 	return nil
+}
+
+func newEventListener(p *Proxy) (*eventListener) {
+	l := new(eventListener)
+	l.p = p
+	l.log = p.logBackend.GetLogger("listener/EventSink")
+	l.enqueueLaterCh = make(chan *enqueueLater)
+	l.Go(l.worker)
+	return l
 }
 
 func newSMTPListener(p *Proxy) (*smtpListener, error) {
@@ -170,7 +310,8 @@ evLoop:
 					s.sConn.Reject()
 					break
 				}
-				if rcpt.PublicKey == nil {
+				// If automatic key discovery is enabled for this account, continue.
+				if rcpt.PublicKey == nil && !env.account.InsecureKeyDiscovery {
 					s.log.Warningf("RCPT TO ('%v') does not specify a known recipient.", rcpt.ID)
 					s.sConn.Reject()
 					break
@@ -219,14 +360,26 @@ func (s *smtpSession) onGotData(env *smtpEnvelope, b []byte, viaESMTP bool) erro
 	// user with a comparatively low volume of mail anyway.
 	failed := make(map[string]error)
 	var enqueued []string
+
 	for _, recipient := range env.recipients {
-		// Add the message to the send queue.
-		if _, err = env.account.EnqueueMessage(recipient, payload, isUnreliable); err != nil {
-			s.log.Errorf("Failed to enqueue for '%v': %v", recipient, err)
-			failed[recipient.ID] = err
-			continue
+		if recipient.PublicKey == nil {
+			msgID, err := s.l.p.QueryKeyFromProvider(env.accountID, recipient.ID)
+			if err != nil {
+				s.log.Warningf("Failed to query key for '%v': ", recipient.ID, err)
+				failed[recipient.ID] = err
+				continue
+			}
+			// defer this message to be sent later
+			expire := time.Now().Add(time.Duration(s.l.p.cfg.Debug.UrgentQueueLifetime) * time.Second)
+			s.l.p.eventListener.enqueueLaterCh <- &enqueueLater{string(msgID), env.accountID, recipient.ID, &payload, entity, isUnreliable, expire}
 		} else {
-			enqueued = append(enqueued, recipient.ID)
+			if _, err = env.account.EnqueueMessage(recipient, payload, isUnreliable); err != nil {
+				s.log.Errorf("Failed to enqueue for '%v': %v", recipient, err)
+				failed[recipient.ID] = err
+				continue
+			} else {
+				enqueued = append(enqueued, recipient.ID)
+			}
 		}
 	}
 

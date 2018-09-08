@@ -65,6 +65,7 @@ type Account struct {
 
 	isConnected bool
 	refCount    int32
+	InsecureKeyDiscovery bool
 }
 
 // Deref decrements the reference count of the Account.  If the reference count
@@ -93,6 +94,10 @@ func (a *Account) doDeref() {
 		panic("BUG: account: refcount is negative: " + a.id)
 	default:
 	}
+}
+
+func (a *Account) GetID() string {
+	return a.id
 }
 
 func (a *Account) doCleanup() {
@@ -256,22 +261,25 @@ func (s *Store) newAccount(id string, cfg *config.Account, pCfg *proxy.Config) (
 
 	// Configure and bring up the minclient instance.
 	a.clientCfg = &minclient.ClientConfig{
-		User:                cfg.User,
-		Provider:            cfg.Provider,
-		ProviderKeyPin:      cfg.ProviderKeyPin,
-		LinkKey:             a.linkKey,
-		LogBackend:          s.logBackend,
-		PKIClient:           nil, // Set later.
-		OnConnFn:            a.onConn,
-		OnEmptyFn:           a.onEmpty,
-		OnMessageFn:         a.onMessage,
-		OnACKFn:             a.onSURB, // Defined in send.go.
-		OnDocumentFn:        a.onDocument,
-		DialContextFn:       pCfg.ToDialContext(id),
-		MessagePollInterval: time.Duration(a.s.cfg.Debug.PollingInterval) * time.Second,
-		EnableTimeSync:      false, // Be explicit about it.
-		PreferedTransports:  pCfg.PreferedTransports,
+		User:                 cfg.User,
+		Provider:             cfg.Provider,
+		ProviderKeyPin:       cfg.ProviderKeyPin,
+		LinkKey:              a.linkKey,
+		LogBackend:           s.logBackend,
+		PKIClient:            nil, // Set later.
+		OnConnFn:             a.onConn,
+		OnEmptyFn:            a.onEmpty,
+		OnMessageFn:          a.onMessage,
+		OnACKFn:              a.onSURB, // Defined in send.go.
+		OnDocumentFn:         a.onDocument,
+		DialContextFn:        pCfg.ToDialContext(id),
+		MessagePollInterval:  time.Duration(a.s.cfg.Debug.PollingInterval) * time.Second,
+		EnableTimeSync:       false, // Be explicit about it.
+		PreferedTransports:   pCfg.PreferedTransports,
 	}
+
+	// Configure InsecureKeyDiscovery
+	a.InsecureKeyDiscovery = cfg.InsecureKeyDiscovery
 
 	var err error
 	a.authority, err = s.authorities.Get(cfg.Authority)
