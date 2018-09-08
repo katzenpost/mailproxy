@@ -365,6 +365,9 @@ The sender's public key was: %v
 	return newMultipartReport(toAddr, "Receive failure, timeout", hrStr, []message.Header{perRecipient}, p)
 }
 
+// KeyLookupSuccess is used to notify the user that a successful
+// unverified key lookup was completed and that they should verify
+// the key out-of-band.
 func KeyLookupSuccess(toAddr string, accountId string, identityKey *ecdh.PublicKey) ([]byte, error) {
 	const humanReadable = `This message was created automatically by the Katzenpost Mail Proxy.
 
