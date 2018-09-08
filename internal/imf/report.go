@@ -382,10 +382,10 @@ depend upon it!
 	keyStr := base64.StdEncoding.EncodeToString(identityKey.Bytes())
 	hrStr := fmt.Sprintf(humanReadable, accountId, keyStr, accountId)
 
-	var b bytes.Buffer
+	b := new(bytes.Buffer)
 	// Create the top level writer.
 	h := newMultipartReportHeader(toAddr, "Key Discovery")
-	mw, err := message.CreateWriter(&b, h)
+	mw, err := message.CreateWriter(b, h)
 	if err != nil {
 		return nil, err
 	}
