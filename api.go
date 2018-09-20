@@ -66,6 +66,7 @@ func (p *Proxy) SendMessage(senderID, recipientID string, payload []byte) ([]byt
 	}
 
 	if rcpt.PublicKey == nil {
+		p.Warning("sending insecure message")
 		expire := time.Now().Add(time.Duration(p.cfg.Debug.UrgentQueueLifetime) * time.Second)
 		isUnreliable := false
 		entity, err := message.Read(bytes.NewReader(payload))
