@@ -47,13 +47,13 @@ type Proxy struct {
 	logBackend *log.Backend
 	log        *logging.Logger
 
-	accounts     *account.Store
-	authorities  *authority.Store
-	recipients   *recipient.Store
-	popListener  *popListener
-	smtpListener *smtpListener
+	accounts      *account.Store
+	authorities   *authority.Store
+	recipients    *recipient.Store
+	popListener   *popListener
+	smtpListener  *smtpListener
 	eventListener *eventListener
-	management   *thwack.Server
+	management    *thwack.Server
 
 	fatalErrCh chan error
 	eventCh    channels.Channel
