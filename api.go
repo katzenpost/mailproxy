@@ -59,7 +59,7 @@ func (p *Proxy) SendMessage(senderID, recipientID string, payload []byte) ([]byt
 	if err != nil {
 		return nil, err
 	}
-	if rcpt.PublicKey == nil {
+	if rcpt.PublicKey == nil && !acc.InsecureKeyDiscovery {
 		return nil, ErrUnknownRecipient
 	}
 
