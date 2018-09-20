@@ -247,6 +247,7 @@ func New(cfg *config.Config) (*Proxy, error) {
 		}
 
 		// Bring the EventSink listener online.
+		p.log.Debug("Starting EventSink listener.")
 		p.eventListener = newEventListener(p)
 
 		// Bring the SMTP interface online.
