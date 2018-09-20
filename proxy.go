@@ -47,13 +47,13 @@ type Proxy struct {
 	logBackend *log.Backend
 	log        *logging.Logger
 
-	accounts     *account.Store
-	authorities  *authority.Store
-	recipients   *recipient.Store
-	popListener  *popListener
-	smtpListener *smtpListener
+	accounts      *account.Store
+	authorities   *authority.Store
+	recipients    *recipient.Store
+	popListener   *popListener
+	smtpListener  *smtpListener
 	eventListener *eventListener
-	management   *thwack.Server
+	management    *thwack.Server
 
 	fatalErrCh chan error
 	eventCh    channels.Channel
@@ -239,22 +239,22 @@ func New(cfg *config.Config) (*Proxy, error) {
 		return nil, ErrGenerateOnly
 	}
 
-	// Bring the POP3 interface online.
+	// Bring the EventSink listener online.
+	p.log.Debug("Starting EventSink listener.")
+	p.eventListener = newEventListener(p)
+
 	if !p.cfg.Proxy.NoLaunchListeners {
+		// Bring the POP3 interface online.
 		if p.popListener, err = newPOPListener(p); err != nil {
 			p.log.Errorf("Failed to start POP3 listener: %v", err)
 			return nil, err
 		}
-
-		// Bring the EventSink listener online.
-		p.eventListener = newEventListener(p)
 
 		// Bring the SMTP interface online.
 		if p.smtpListener, err = newSMTPListener(p); err != nil {
 			p.log.Errorf("Failed to start SMTP listener: %v", err)
 			return nil, err
 		}
-
 	} else {
 		p.log.Debugf("Skipping POP3/SMTP listener initialization.")
 	}

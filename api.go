@@ -17,6 +17,7 @@
 package mailproxy
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"time"
@@ -59,8 +60,27 @@ func (p *Proxy) SendMessage(senderID, recipientID string, payload []byte) ([]byt
 	if err != nil {
 		return nil, err
 	}
-	if rcpt.PublicKey == nil {
+
+	if rcpt.PublicKey == nil && !acc.InsecureKeyDiscovery {
 		return nil, ErrUnknownRecipient
+	}
+
+	if rcpt.PublicKey == nil {
+		p.log.Warning("sending insecure message")
+		expire := time.Now().Add(time.Duration(p.cfg.Debug.UrgentQueueLifetime) * time.Second)
+		isUnreliable := false
+		entity, err := message.Read(bytes.NewReader(payload))
+		if err != nil {
+			return nil, err
+		}
+		msgID, err := p.QueryKeyFromProvider(senderID, recipientID)
+		if err != nil {
+			return nil, err
+		}
+		p.log.Debugf("message ID %x", msgID)
+		p.eventListener.enqueueLaterCh <- &enqueueLater{string(msgID), senderID, recipientID, &payload, entity, isUnreliable, expire}
+		p.log.Debug("message enqueued for sending later")
+		return msgID, nil
 	}
 
 	// Validate and pre-process the outgoing message body.
@@ -214,6 +234,7 @@ func (p *Proxy) GetRecipient(recipientID string) (*ecdh.PublicKey, error) {
 
 // SetRecipient sets the public key for the provided recipient.
 func (p *Proxy) SetRecipient(recipientID string, publicKey *ecdh.PublicKey) error {
+	p.log.Debug("SetRecipient %s %s", recipientID, publicKey.String())
 	return p.recipients.Set(recipientID, publicKey)
 }
 

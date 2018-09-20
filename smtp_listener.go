@@ -51,7 +51,6 @@ type smtpListener struct {
 	log *logging.Logger
 
 	connID uint64
-
 }
 
 func (l *smtpListener) Halt() {
@@ -105,11 +104,11 @@ func (e *enqueueLater) sendIMFFailure(account *account.Account, err error) {
 type eventListener struct {
 	worker.Worker
 
-	p *Proxy
+	p   *Proxy
 	log *logging.Logger
 
 	enqueueLaterCh chan *enqueueLater
-	sendLater map[string]*enqueueLater
+	sendLater      map[string]*enqueueLater
 }
 
 func (l *eventListener) onKaetzchenReply(e *event.KaetzchenReplyEvent) {
@@ -155,7 +154,7 @@ func (l *eventListener) onKaetzchenReply(e *event.KaetzchenReplyEvent) {
 	}
 	acc.StoreReport(report)
 	rcpt, err = l.p.toAccountRecipient(r.rID)
-	if  err != nil {
+	if err != nil {
 		l.log.Warningf("Failed to lookup freshly discovered account: %v", err)
 		return
 	}
@@ -224,7 +223,7 @@ func (l *smtpListener) onNewConn(conn net.Conn) error {
 	return nil
 }
 
-func newEventListener(p *Proxy) (*eventListener) {
+func newEventListener(p *Proxy) *eventListener {
 	l := new(eventListener)
 	l.p = p
 	l.log = p.logBackend.GetLogger("listener/EventSink")
