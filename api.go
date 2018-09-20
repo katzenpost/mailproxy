@@ -17,6 +17,7 @@
 package mailproxy
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"time"
@@ -59,8 +60,24 @@ func (p *Proxy) SendMessage(senderID, recipientID string, payload []byte) ([]byt
 	if err != nil {
 		return nil, err
 	}
+
 	if rcpt.PublicKey == nil && !acc.InsecureKeyDiscovery {
 		return nil, ErrUnknownRecipient
+	}
+
+	if rcpt.PublicKey == nil {
+		expire := time.Now().Add(time.Duration(p.cfg.Debug.UrgentQueueLifetime) * time.Second)
+		isUnreliable := false
+		entity, err := message.Read(bytes.NewReader(payload))
+		if err != nil {
+			return nil, err
+		}
+		msgID, err := p.QueryKeyFromProvider(senderID, recipientID)
+		if err != nil {
+			return nil, err
+		}
+		p.eventListener.enqueueLaterCh <- &enqueueLater{string(msgID), senderID, recipientID, &payload, entity, isUnreliable, expire}
+		return msgID, nil
 	}
 
 	// Validate and pre-process the outgoing message body.
