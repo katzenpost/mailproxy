@@ -77,7 +77,9 @@ func (p *Proxy) SendMessage(senderID, recipientID string, payload []byte) ([]byt
 		if err != nil {
 			return nil, err
 		}
+		p.log.Debugf("message ID %x", msgID)
 		p.eventListener.enqueueLaterCh <- &enqueueLater{string(msgID), senderID, recipientID, &payload, entity, isUnreliable, expire}
+		p.log.Debug("message enqueued for sending later")
 		return msgID, nil
 	}
 
@@ -232,6 +234,7 @@ func (p *Proxy) GetRecipient(recipientID string) (*ecdh.PublicKey, error) {
 
 // SetRecipient sets the public key for the provided recipient.
 func (p *Proxy) SetRecipient(recipientID string, publicKey *ecdh.PublicKey) error {
+	p.log.Debug("SetRecipient %s %s", recipientID, publicKey.String())
 	return p.recipients.Set(recipientID, publicKey)
 }
 
