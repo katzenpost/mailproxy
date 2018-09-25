@@ -225,7 +225,7 @@ func (a *Account) EnqueueMessage(recipient *Recipient, msg []byte, isUnreliable 
 		return nil, err
 	}
 
-	a.log.Debugf("Message [%v](->%v): Enqueued %d blocks.", hex.EncodeToString(msgID[:]), recipient.ID, len(blocks))
+	a.log.Noticef("Message [%v](->%v): Enqueued %d blocks.", hex.EncodeToString(msgID[:]), recipient.ID, len(blocks))
 	return msgID[:], nil
 }
 
@@ -287,7 +287,7 @@ func (a *Account) EnqueueKaetzchenRequest(recipient *Recipient, msg []byte, isUn
 		return nil, err
 	}
 
-	a.log.Debugf("Message [%v](->%v): Enqueued Kaetzchen Request.", hex.EncodeToString(msgID[:]), recipient.ID)
+	a.log.Noticef("Message [%v](->%v): Enqueued Kaetzchen Request.", hex.EncodeToString(msgID[:]), recipient.ID)
 
 	return msgID[:], nil
 }
@@ -372,7 +372,7 @@ func (a *Account) doSend(blk *sendBlockCtx) error {
 	var surbKey []byte
 	var eta uint64
 	if !blk.isUnreliable {
-		a.log.Debugf("Message [%v](->%v): Sending block %v.", msgIDStr, destStr, blk.blockID)
+		a.log.Noticef("Message [%v](->%v): Sending block %v.", msgIDStr, destStr, blk.blockID)
 
 		var deltaT time.Duration
 		surbKey, deltaT, err = a.client.SendCiphertext(blk.user, blk.provider, &blk.surbID, blk.payload)
@@ -381,7 +381,7 @@ func (a *Account) doSend(blk *sendBlockCtx) error {
 		}
 		eta = a.nowUnix() + uint64(deltaT.Seconds())
 	} else {
-		a.log.Debugf("Message [%v](->%v, Unreliable): Sending block %v.", msgIDStr, destStr, blk.blockID)
+		a.log.Noticef("Message [%v](->%v, Unreliable): Sending block %v.", msgIDStr, destStr, blk.blockID)
 		if err = a.client.SendUnreliableCiphertext(blk.user, blk.provider, blk.payload); err != nil {
 			return nil
 		}
@@ -450,7 +450,7 @@ func (a *Account) doSend(blk *sendBlockCtx) error {
 		if !blk.isUnreliable {
 			etaBkt := msgBkt.Bucket([]byte(surbETAsBucket))
 			etaBkt.Put(uint64ToBytes(blk.blockID), uint64ToBytes(eta))
-			a.log.Debugf("Message [%v](->%v): SURB stored [%v](Block: %v ETA: %v)", msgIDStr, destStr, hex.EncodeToString(blk.surbID[:]), blk.blockID, eta)
+			a.log.Noticef("Message [%v](->%v): SURB stored [%v](Block: %v ETA: %v)", msgIDStr, destStr, hex.EncodeToString(blk.surbID[:]), blk.blockID, eta)
 		} else {
 			// Treat sending a block of an unreliable message as if it
 			// immediately received a synthetic ACK.
@@ -787,7 +787,7 @@ func (a *Account) onACK(idStr string, sendBkt *bolt.Bucket, ack *surbCtx, isSynt
 	cur := blocksBkt.Cursor()
 	if first, _ := cur.First(); first == nil {
 		// Message has been fully ACKed.
-		a.log.Debugf("Message [%v]: Fully ACKed by peer.", msgIDStr)
+		a.log.Noticef("Message [%v]: Fully ACKed by peer.", msgIDStr)
 		spoolBkt.DeleteBucket(msgSeq)
 		a.resetSpoolSeq(spoolBkt)
 
