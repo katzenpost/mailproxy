@@ -150,6 +150,7 @@ func (s *Store) Set(r string, k *ecdh.PublicKey) error {
 	return nil
 }
 
+// LoadFromPEM adds a receipient from a PEM file on disk.
 func (s *Store) LoadFromPEM(path string) error {
 	k := new(ecdh.PublicKey)
 	err := k.FromPEMFile(path)

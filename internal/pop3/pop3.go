@@ -86,7 +86,7 @@ var (
 
 	// ErrBackendFail is the error returned by a Backend if a user's maildrop
 	// can't be acquired due to an internal error.
-	ErrBackendFail = errors.New("[BACKEND-FAIL] Internal error in backend.")
+	ErrBackendFail = errors.New("[BACKEND-FAIL] Internal error in backend")
 )
 
 type sessionState int

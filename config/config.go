@@ -200,6 +200,7 @@ func (dCfg *Debug) applyDefaults() {
 	}
 }
 
+// VotingPeer is the mail proxy authority peer configuration.
 type VotingPeer struct {
 	// Address is the IP address/port combination of the authority.
 	Addresses []string
@@ -229,6 +230,7 @@ func (peer *VotingPeer) validate() error {
 	return nil
 }
 
+// VotingAuthority is a voting authority configuration.
 type VotingAuthority struct {
 	Peers []*vServerConfig.AuthorityPeer
 }
@@ -442,7 +444,7 @@ type Config struct {
 	StrRecipients map[string]string `toml:"Recipients"`
 }
 
-// AuthorityMap returns the identifier->authority.Factory mapping specified in
+// VotingAuthorityMap returns the identifier->authority.Factory mapping specified in
 // the Config.
 func (cfg *Config) VotingAuthorityMap() map[string]authority.Factory {
 	return cfg.votingAuthorities
@@ -509,11 +511,11 @@ func (cfg *Config) FixupAndValidate() error {
 	if err := cfg.Management.validate(); err != nil {
 		return err
 	}
-	if uCfg, err := cfg.UpstreamProxy.toProxyConfig(); err != nil {
+	uCfg, err := cfg.UpstreamProxy.toProxyConfig()
+	if err != nil {
 		return err
-	} else {
-		cfg.upstreamProxy = uCfg
 	}
+	cfg.upstreamProxy = uCfg
 	for k, v := range cfg.NonvotingAuthority {
 		if err := v.validate(); err != nil {
 			return fmt.Errorf("config: NonvotingAuthority '%v' is invalid: %v", k, err)

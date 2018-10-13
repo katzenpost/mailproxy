@@ -284,7 +284,7 @@ func New(cfg *config.Config) (*Proxy, error) {
 	return p, nil
 }
 
-// Scan the RecipientDir for PEM-encoded identities and import them into the recipient Store.
+// ScanRecipientDir looks for for PEM-encoded identities in the ReceipientDir and imports into the recipient Store.
 func (p *Proxy) ScanRecipientDir() error {
 	p.log.Noticef("Scanning RecipientDir for identities.")
 	path := p.cfg.Proxy.RecipientDir

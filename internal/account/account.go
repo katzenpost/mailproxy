@@ -97,6 +97,7 @@ func (a *Account) doDeref() {
 	}
 }
 
+// GetID returns the Account.id user@provider string
 func (a *Account) GetID() string {
 	return a.id
 }

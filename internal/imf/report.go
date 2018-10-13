@@ -368,7 +368,7 @@ The sender's public key was: %v
 // KeyLookupSuccess is used to notify the user that a successful
 // unverified key lookup was completed and that they should verify
 // the key out-of-band.
-func KeyLookupSuccess(toAddr string, accountId string, identityKey *ecdh.PublicKey) ([]byte, error) {
+func KeyLookupSuccess(toAddr string, accountID string, identityKey *ecdh.PublicKey) ([]byte, error) {
 	const humanReadable = `This message was created automatically by the Katzenpost Mail Proxy.
 
 The SMTP to Katzenpost interface successfully requested an identity key for the following identity:
@@ -380,7 +380,7 @@ out-of-band, because the confidentiality of messages to this recipient
 depend upon it!
 `
 	keyStr := base64.StdEncoding.EncodeToString(identityKey.Bytes())
-	hrStr := fmt.Sprintf(humanReadable, accountId, keyStr, accountId)
+	hrStr := fmt.Sprintf(humanReadable, accountID, keyStr, accountID)
 
 	b := new(bytes.Buffer)
 	// Create the top level writer.
