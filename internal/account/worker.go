@@ -40,14 +40,12 @@ type opNewDocument struct {
 func (a *Account) worker() {
 	const (
 		maxDuration  = math.MaxInt64
-		minSendShift = 1000 // 1 second.
 		serviceLoop  = "loop"
 	)
 
 	// Intentionally use super conservative values for the send scheduling
 	// if the PKI happens to not specify any.
 	sendLambda := 0.00001
-	sendShift := uint64(60000)
 	sendMaxInterval := uint64(rand.ExpQuantile(sendLambda, 0.99999))
 
 	mRng := rand.NewMath()
@@ -112,19 +110,11 @@ func (a *Account) worker() {
 					}
 				}
 			case *opNewDocument:
-				// Update the Send[Lambda,Shift,MaxInterval] parameters from
+				// Update the Send[Lambda,MaxInterval] parameters from
 				// the PKI document.
 				if newSendLambda := op.doc.SendLambda; newSendLambda != sendLambda {
 					a.log.Debugf("Updated SendLambda: %v", newSendLambda)
 					sendLambda = newSendLambda
-				}
-				if newSendShift := op.doc.SendShift; newSendShift != sendShift {
-					if newSendShift < minSendShift {
-						a.log.Debugf("Ignoring pathologically small SendShift: %v", newSendShift)
-					} else {
-						a.log.Debugf("Updated SendShift: %v", newSendShift)
-						sendShift = newSendShift
-					}
 				}
 				if newSendMaxInterval := op.doc.SendMaxInterval; newSendMaxInterval != sendMaxInterval {
 					a.log.Debugf("Updated SendMaxInterval: %v", newSendMaxInterval)
@@ -166,7 +156,6 @@ func (a *Account) worker() {
 				wakeMsec = sendMaxInterval
 			default:
 			}
-			wakeMsec += sendShift // Sample, clamp, then shift.
 
 			wakeInterval = time.Duration(wakeMsec) * time.Millisecond
 			a.log.Debugf("wakeInterval: %v", wakeInterval)
