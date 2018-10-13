@@ -325,7 +325,7 @@ func (a *Account) storeRecvMessage(recvBkt *bolt.Bucket, id, payload []byte) {
 	msgID := id[ecdh.PublicKeySize:]
 
 	idStr := fmt.Sprintf("%v:%v", sender, hex.EncodeToString(msgID))
-	a.log.Debugf("storeRecvMessage: %v", idStr)
+	a.log.Noticef("storeRecvMessage: %v", idStr)
 
 	// Test+set the de-duplication cache entry.
 	if a.testDuplicate(recvBkt, msgID, true) {
