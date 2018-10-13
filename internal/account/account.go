@@ -290,13 +290,11 @@ func (s *Store) newAccount(id string, cfg *config.Account, pCfg *proxy.Config) (
 	var err error
 	a.nonvotingAuthority, err = s.authorities.Get(cfg.NonvotingAuthority)
 	if err != nil {
-		return nil, err
+		a.votingAuthority, err = s.authorities.Get(cfg.VotingAuthority)
+		if err != nil {
+			return nil, err
+		}
 	}
-	a.votingAuthority, err = s.authorities.Get(cfg.VotingAuthority)
-	if err != nil {
-		return nil, err
-	}
-
 	if a.nonvotingAuthority != nil {
 		a.clientCfg.PKIClient = a.nonvotingAuthority.Client()
 	}

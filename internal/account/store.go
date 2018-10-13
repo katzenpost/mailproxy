@@ -121,13 +121,19 @@ func NewStore(g glue.ProxyInternals) *Store {
 	s := new(Store)
 	s.cfg = g.Config()
 	s.logBackend = g.LogBackend()
-	auth := g.NonvotingAuthorities()
-	if auth != nil {
-		s.authorities = auth
+	if len(s.cfg.NonvotingAuthority) > 0 {
+		auth := g.NonvotingAuthorities()
+		if auth != nil {
+			s.authorities = auth
+		}
+	} else if len(s.cfg.VotingAuthority) > 0 {
+		auth := g.VotingAuthorities()
+		if auth != nil {
+			s.authorities = auth
+		}
 	}
-	auth = g.VotingAuthorities()
-	if auth != nil {
-		s.authorities = auth
+	if s.authorities == nil {
+		return nil
 	}
 	s.eventCh = g.EventCh()
 	s.fatalErrCh = g.FatalErrCh()
