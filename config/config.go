@@ -527,7 +527,7 @@ func (cfg *Config) FixupAndValidate() error {
 	}
 	for k, v := range cfg.VotingAuthority {
 		if err := v.validate(); err != nil {
-			return fmt.Errorf("config: NonvotingAuthority '%v' is invalid: %v", k, err)
+			return fmt.Errorf("config: VotingAuthority '%v' is invalid: %v", k, err)
 		}
 		if _, ok := cfg.votingAuthorities[k]; ok {
 			return fmt.Errorf("config: Authority '%v' is defined multiple times", k)
