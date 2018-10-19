@@ -427,8 +427,8 @@ type Config struct {
 	UpstreamProxy *UpstreamProxy
 	Debug         *Debug
 
-	NonvotingAuthority map[string]*NonvotingAuthority
-	VotingAuthority    map[string]*VotingAuthority
+	NonvotingAuthority map[string]*NonvotingAuthority `toml:",omitempty"`
+	VotingAuthority    map[string]*VotingAuthority `toml:",omitempty"`
 	Account            []*Account
 	Recipients         map[string]*ecdh.PublicKey `toml:"-"`
 
