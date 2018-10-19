@@ -29,6 +29,7 @@ import (
 	"github.com/katzenpost/core/utils"
 	"github.com/katzenpost/core/worker"
 	"github.com/katzenpost/mailproxy/config"
+	"github.com/katzenpost/mailproxy/event"
 	"github.com/katzenpost/mailproxy/internal/account"
 	"github.com/katzenpost/mailproxy/internal/authority"
 	"github.com/katzenpost/mailproxy/internal/recipient"
@@ -60,6 +61,7 @@ type Proxy struct {
 	eventCh    channels.Channel
 	haltedCh   chan interface{}
 	haltOnce   sync.Once
+	EventSink  chan event.Event
 }
 
 func (p *Proxy) initLogging() error {

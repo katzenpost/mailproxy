@@ -199,7 +199,7 @@ func (l *eventListener) worker() {
 			l.prune(t)
 		case msg := <-l.enqueueLaterCh:
 			l.sendLater[msg.replyID] = msg
-		case evt := <-l.p.cfg.Proxy.EventSink:
+		case evt := <-l.p.EventSink:
 			switch e := evt.(type) {
 			case *event.KaetzchenReplyEvent:
 				l.onKaetzchenReply(e)

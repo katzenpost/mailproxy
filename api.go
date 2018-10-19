@@ -292,13 +292,14 @@ func (p *Proxy) eventSinkWorker() {
 		case <-p.HaltCh():
 			return
 		case e := <-p.eventCh.Out():
-			p.cfg.Proxy.EventSink <- e.(event.Event)
+			p.EventSink <- e.(event.Event)
 		}
 	}
 }
 
 func (p *Proxy) initializeEventSink() {
-	if p.cfg.Proxy.EventSink != nil {
+	if p.cfg.Proxy.EnableEventSink {
+		p.EventSink = make(chan event.Event)
 		p.Go(p.eventSinkWorker)
 	} else {
 		channels.Pipe(p.eventCh, channels.NewBlackHole())
