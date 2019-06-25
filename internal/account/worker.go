@@ -39,8 +39,8 @@ type opNewDocument struct {
 
 func (a *Account) worker() {
 	const (
-		maxDuration  = math.MaxInt64
-		serviceLoop  = "loop"
+		maxDuration = math.MaxInt64
+		serviceLoop = "loop"
 	)
 
 	// Intentionally use super conservative values for the send scheduling
