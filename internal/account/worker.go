@@ -112,11 +112,11 @@ func (a *Account) worker() {
 			case *opNewDocument:
 				// Update the Send[Lambda,MaxInterval] parameters from
 				// the PKI document.
-				if newSendLambda := op.doc.SendLambda; newSendLambda != sendLambda {
+				if newSendLambda := op.doc.LambdaP; newSendLambda != sendLambda {
 					a.log.Debugf("Updated SendLambda: %v", newSendLambda)
 					sendLambda = newSendLambda
 				}
-				if newSendMaxInterval := op.doc.SendMaxInterval; newSendMaxInterval != sendMaxInterval {
+				if newSendMaxInterval := op.doc.LambdaPMaxDelay; newSendMaxInterval != sendMaxInterval {
 					a.log.Debugf("Updated SendMaxInterval: %v", newSendMaxInterval)
 					sendMaxInterval = newSendMaxInterval
 				}
