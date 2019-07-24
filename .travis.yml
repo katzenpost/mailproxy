@@ -3,8 +3,13 @@ language: go
 go:
   - "1.12"
 
+env:
+  global:
+    GO111MODULE=on
+
 install:
- - go get -v -t ./...
+ - cd cmd/mailproxy
+ - go build
 
 script:
  - go test -v ./...
