@@ -14,10 +14,20 @@ This is a implementation of a proxy server that exposes a POP/SMTP interface
 to Katzenpost based mix networks. It is intended to run on a user's localhost
 to allow standard mail clients to send and receive mail over the mixnet.
 
-To build the mailproxy see the 'daemons' repo:
 
-https://github.com/Katzenpost/daemons
+Building
+--------
 
+Requires golang 1.11 or later. Dependencies pinned using go-modules.
+For more info about go-modules, see: https://github.com/golang/go/wiki/Modules
+
+Build the mix server like this:
+
+```
+export GO111MODULE=on
+cd cmd/mailproxy
+go build
+```
 
 author
 ======
