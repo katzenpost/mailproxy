@@ -1,8 +1,7 @@
 language: go
 
 go:
-  - 1.9
-  - tip
+  - "1.12"
 
 install:
  - go get -v -t ./...
