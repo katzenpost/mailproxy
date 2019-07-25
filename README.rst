@@ -22,12 +22,12 @@ Requires golang 1.11 or later. Dependencies pinned using go-modules.
 For more info about go-modules, see: https://github.com/golang/go/wiki/Modules
 
 Build the mix server like this:
+::
 
-```
-export GO111MODULE=on
-cd cmd/mailproxy
-go build
-```
+   export GO111MODULE=on
+   cd cmd/mailproxy
+   go build
+
 
 author
 ======
