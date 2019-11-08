@@ -29,7 +29,6 @@ import (
 	"github.com/katzenpost/mailproxy/event"
 	"github.com/katzenpost/mailproxy/internal/account"
 	"github.com/katzenpost/mailproxy/internal/imf"
-	"gopkg.in/eapache/channels.v1"
 )
 
 var (
@@ -298,10 +297,6 @@ func (p *Proxy) eventSinkWorker() {
 }
 
 func (p *Proxy) initializeEventSink() {
-	if p.cfg.Proxy.EnableEventSink {
-		p.EventSink = make(chan event.Event)
-		p.Go(p.eventSinkWorker)
-	} else {
-		channels.Pipe(p.eventCh, channels.NewBlackHole())
-	}
+	p.EventSink = make(chan event.Event)
+	p.Go(p.eventSinkWorker)
 }
