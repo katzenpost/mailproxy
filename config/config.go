@@ -78,9 +78,6 @@ type Proxy struct {
 	// useful if you are using mailproxy as a library rather than a
 	// stand-alone process.
 	NoLaunchListeners bool
-
-	// EnableEventSink enables sending events to a channel that API users can read events from.
-	EnableEventSink bool
 }
 
 func (pCfg *Proxy) applyDefaults() {
