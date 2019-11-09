@@ -47,6 +47,7 @@ func main() {
 
 	registrationAddr := flag.String("registrationAddr", playground.RegistrationAddr, "account registration address")
 	onionRegistrationAddr := flag.String("onionRegistrationAddr", playground.OnionRegistrationAddr, "account registration address")
+	registerWithoutHttps := flag.Bool("registrationWithoutHttps", false, "register using insecure http (for testing environments)")
 
 	registerWithOnion := flag.Bool("onion", false, "register using the Tor onion service")
 	socksNet := flag.String("torSocksNet", "tcp", "tor SOCKS network (e.g. tcp or unix)")
@@ -95,6 +96,13 @@ func main() {
 				UseSocks:     true,
 				SocksNetwork: *socksNet,
 				SocksAddress: *socksAddr,
+			}
+		} else if *registerWithoutHttps {
+			options = &client.Options{
+				Scheme:       "http",
+				UseSocks:     false,
+				SocksNetwork: "",
+				SocksAddress: "",
 			}
 		}
 		c, err := client.New(*registrationAddr, options)
