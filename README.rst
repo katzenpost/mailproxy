@@ -29,6 +29,35 @@ Build the mix server like this:
    go build
 
 
+Basic Usage
+--------
+
+Mailproxy can generate the keys, configuration file and perform the registration
+via HTTP all in one call using the `-r` option:
+::
+
+   ./mailproxy -r -authority 127.0.0.1:29483 -authorityKey "o4w1Nyj/nKNwho5SWfAIfh7SMU8FRx52nMHGgYsMHqQ=" -registrationAddr 127.0.0.1:8000 -registrationWithoutHttps -provider provider1 -providerKey "2krwfNDfbakZCSTUUZYKXwdduzlEgS9Jfwm7eyZ0sCg=" -account alice
+
+
+The daemon can then be run using:
+::
+
+   ./mailproxy -f ~/.mailproxy/mailproxy.toml
+
+Now you can either set up any mail client or use swaks and curl.
+Sending test messages with swaks:
+::
+
+   swaks --from alice@provider1 --to bob@provider2 --server 127.0.0.1:2525
+
+Listing the inbox and receiving the first message with:
+::
+
+   curl --user alice@provider1:pw pop3://127.0.0.1:2524
+   curl --user alice@provider1:pw pop3://127.0.0.1:2524/1
+
+
+
 author
 ======
 
