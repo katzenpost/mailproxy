@@ -56,7 +56,17 @@ Listing the inbox and receiving the first message with:
    curl --user alice@provider1:pw pop3://127.0.0.1:2524
    curl --user alice@provider1:pw pop3://127.0.0.1:2524/1
 
+Manual Registration
+--------
 
+In case HTTP registration is not available the user needs to be created at the provider using the management socket.
+::
+
+    socat unix:/<path-to-data-dir>/management_sock STDOUT
+    ADD_USER alice X25519_link_public_key_in_hex_or_base64
+    SET_USER_IDENTITY alice X25519_identity_public_key_in_hex_or_base64
+    
+The keys can be found in the mailproxy data dir (default is ~/.mailproxy) as 'link.public.pem' and 'identity.public.pem' respectively.
 
 author
 ======
