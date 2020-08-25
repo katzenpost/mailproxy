@@ -74,9 +74,7 @@ func main() {
 		} else {
 			mailproxyDir = *dataDir
 		}
-		if _, err := os.Stat(mailproxyDir); !os.IsNotExist(err) {
-			panic(fmt.Sprintf("aborting registration, %s already exists", mailproxyDir))
-		}
+		// It will not do anything if the dir already exists
 		if err := utils.MkDataDir(mailproxyDir); err != nil {
 			panic(err)
 		}
