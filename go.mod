@@ -12,7 +12,7 @@ require (
 	github.com/katzenpost/minclient v0.0.9
 	github.com/katzenpost/noise v0.0.0-20190907211420-4c2fa3a5d7a1
 	github.com/katzenpost/playground v0.0.4
-	github.com/katzenpost/registration_client v0.0.2
+	github.com/katzenpost/registration_client v0.0.3
 	github.com/katzenpost/server v0.0.12 // indirect
 	github.com/siebenmann/smtpd v0.0.0-20170816215504-b93303610bbe
 	github.com/stretchr/testify v1.4.0
